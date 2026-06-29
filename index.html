@@ -945,7 +945,7 @@ function App(){
     ];
     chs.forEach(c=>c.subscribe());
     // ★ 폴링: 5초마다 orders 갱신 (전광판 실시간 반영용)
-    const pollTimer=setInterval(()=>{if(!pollPaused.current)loadOrders();},5000);
+    const pollTimer=setInterval(()=>{if(!pollPaused.current)loadOrders();},300000);
     return()=>{chs.forEach(c=>sb.removeChannel(c));clearInterval(pollTimer);};
   },[user]);
   useEffect(()=>{if(channels.length>0&&!orderForm.channelId)setOrderForm(f=>({...f,channelId:String(channels[0].id)}));},[channels]);
