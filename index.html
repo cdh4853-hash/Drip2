@@ -1069,6 +1069,7 @@ function App(){
   const[anaRows,setAnaRows]=useState([]); // drip2_orders 중 status=완료 원본 행 (SQL에서 기간 필터링 후 조회)
   const[anaLoading,setAnaLoading]=useState(false);
   const[anaSelDay,setAnaSelDay]=useState(null); // 가동률/생산시간 그래프에서 클릭한 날짜(YYYY-MM-DD)
+  const[anaPackSelDay,setAnaPackSelDay]=useState(null); // 낱개 포장량 그래프에서 클릭한 날짜
   const[anaNoteMap,setAnaNoteMap]=useState({}); // {date: {note, workers, hours}} 조회 기간 내 저장된 기록 — 날짜마다 반드시 입력 (기본값 없음)
   const[anaNoteDraft,setAnaNoteDraft]=useState(""); // 현재 선택일 사유 입력값
   const[anaWorkerDraft,setAnaWorkerDraft]=useState({workers:"",hours:8,overtime:0}); // 선택일 작업자/근무시간/연장근무시간 입력값
@@ -1273,6 +1274,12 @@ function App(){
       noteRows.push([d,WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()]+"요일",n.workers??"",n.hours??"",n.overtime||0,n.note||""]);
     });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(noteRows),"사유기록");
+
+    const packRows=[["날짜","요일","낱개 포장량(개)"]];
+    Object.keys(anaPackDayMap).sort().forEach(d=>{
+      packRows.push([d,WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()]+"요일",anaPackDayMap[d]]);
+    });
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(packRows),"낱개포장량");
 
     const chRows=[["순위","업체","생산량(개)","비율(%)"]];
     anaChannelStats.forEach((c,i)=>chRows.push([i+1,c.label,c.value,Number((c.value/(anaTotalQty||1)*100).toFixed(1))]));
@@ -1978,6 +1985,34 @@ function App(){
   const anaUtilAvg=anaUtilValsFilled.length?anaUtilValsFilled.reduce((a,b)=>a+b,0)/anaUtilValsFilled.length:0;
   const anaUtilMax=anaUtilValsFilled.length?Math.max(...anaUtilValsFilled):0;
   const anaUtilMin=anaUtilValsFilled.length?Math.min(...anaUtilValsFilled):0;
+
+  // 일별 낱개 포장량 집계 — 완제품 생산완료 수량 × 그 제품 BOM 구성품 총 수량 (예: 세트 하나에 낱개 6종×3개=18개 들어가면 100세트=1800개)
+  const anaPackDayMap={};
+  anaRows.forEach(r=>{
+    const d=(r.plan_date||"").slice(0,10);if(!d)return;
+    const unitsPerProduct=bomOf(r.p_code).reduce((a,c)=>a+(c.qty||0),0);
+    anaPackDayMap[d]=(anaPackDayMap[d]||0)+(r.qty||0)*unitsPerProduct;
+  });
+  const anaPackDayKeys=Object.keys(anaPackDayMap).sort();
+  const anaPackTrend=anaPackDayKeys.map(d=>({date:d,label:d.slice(5).replace("-","/"),value:anaPackDayMap[d]}));
+  const anaPackTotal=anaPackDayKeys.reduce((a,d)=>a+anaPackDayMap[d],0);
+  const anaPackAvg=anaPackDayKeys.length?anaPackTotal/anaPackDayKeys.length:0;
+  const anaPackMax=anaPackDayKeys.length?Math.max(...anaPackDayKeys.map(d=>anaPackDayMap[d])):0;
+  // 선택한 날짜의 낱개 포장량 근거 — 어떤 완제품을 몇 개 만들었고, 제품당 낱개가 몇 개 들어가는지
+  const anaPackSelRows=anaPackSelDay?anaRows.filter(r=>(r.plan_date||"").slice(0,10)===anaPackSelDay):[];
+  const anaPackSelMap={};
+  anaPackSelRows.forEach(r=>{
+    const k=r.p_code;
+    if(!anaPackSelMap[k])anaPackSelMap[k]={qty:0};
+    anaPackSelMap[k].qty+=r.qty||0;
+  });
+  const anaPackSelDetail=Object.keys(anaPackSelMap).map(k=>{
+    const unitsPerProduct=bomOf(k).reduce((a,c)=>a+(c.qty||0),0);
+    return{code:k,label:pName(k),qty:anaPackSelMap[k].qty,unitsPerProduct,packQty:anaPackSelMap[k].qty*unitsPerProduct};
+  }).sort((a,b)=>b.packQty-a.packQty);
+  const anaPackSelTotalQty=anaPackSelDetail.reduce((a,b)=>a+b.qty,0);
+  const anaPackSelTotalPack=anaPackSelDetail.reduce((a,b)=>a+b.packQty,0);
+  const anaPackSelWeekday=anaPackSelDay?WEEKDAY_KR[new Date(anaPackSelDay+"T00:00:00Z").getUTCDay()]+"요일":"";
 
   // 선택한 날짜(anaSelDay)의 가동률 근거 상세 — 어떤 제품을 몇 개, 몇 시간 생산했는지
   const anaSelRows=anaSelDay?anaRows.filter(r=>(r.plan_date||"").slice(0,10)===anaSelDay):[];
@@ -2799,6 +2834,41 @@ function App(){
                       <button onClick={saveAnaNote} disabled={anaNoteSaving} style={{...primaryBtn,padding:"6px 18px",fontSize:13,opacity:anaNoteSaving?.6:1}}>{anaNoteSaving?"저장 중...":"💾 저장"}</button>
                     </div>
                   </div>
+                </div>
+              )}
+            </div>
+
+            {/* 하루 낱개 포장량 추이 */}
+            <div style={{marginBottom:26}}>
+              <SecTitle icon="📦" title="하루 낱개 포장량 추이"/>
+              <TrendSvgChart data={anaPackTrend} color="#4db6ac" unit="개" selected={anaPackSelDay} onSelect={d=>setAnaPackSelDay(prev=>prev===d?null:d)}/>
+              <div style={{display:"flex",gap:20,marginTop:8,fontSize:13,color:"#a8b8a0",flexWrap:"wrap"}}>
+                <span>총 포장량 <b style={{color:"#f5c97a"}}>{anaPackTotal.toLocaleString()}개</b></span>
+                <span>일평균 <b style={{color:"#6fcf97"}}>{anaPackAvg.toLocaleString(undefined,{maximumFractionDigits:0})}개</b></span>
+                <span>최대 <b style={{color:"#4db6ac"}}>{anaPackMax.toLocaleString()}개</b></span>
+              </div>
+              {anaPackTrend.length===0&&<div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>💡 완제품 생산완료 수량 × BOM 구성품 총 수량으로 계산돼요. (예: 세트 1개에 낱개 6종×3개=18개면 100세트 생산 시 1,800개)</div>}
+
+              {/* 선택한 날짜의 낱개 포장량 근거 */}
+              {anaPackSelDay&&(
+                <div style={{marginTop:14,background:"rgba(77,182,172,.08)",border:"1px solid #4db6ac55",borderRadius:12,padding:"16px 18px"}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:8}}>
+                    <div style={{fontSize:14,fontWeight:700,color:"#4db6ac"}}>📅 {anaPackSelDay} ({anaPackSelWeekday}) 낱개 포장량 근거</div>
+                    <button onClick={()=>setAnaPackSelDay(null)} style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",borderRadius:6,color:"#c8c8b8",padding:"3px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✕ 닫기</button>
+                  </div>
+                  <Tbl headers={["완제품","생산수량","제품당 낱개수","낱개 포장량"]}>
+                    {anaPackSelDetail.map(d=>(
+                      <tr key={d.code}>
+                        <Td><div style={{color:"#9a7050",fontSize:11}}>[{d.code}]</div><div style={{color:"#f5c97a",fontWeight:600}}>{d.label}</div></Td>
+                        <Td>{d.qty.toLocaleString()}개</Td>
+                        <Td>{d.unitsPerProduct?d.unitsPerProduct+"개":<span style={{color:"#e89090"}}>BOM 미설정(0)</span>}</Td>
+                        <Td style={{color:"#4db6ac",fontWeight:700}}>{d.packQty.toLocaleString()}개</Td>
+                      </tr>
+                    ))}
+                    {anaPackSelDetail.length===0&&<tr><Td style={{textAlign:"center",color:"#8a9a88"}} colSpan={4}>해당 날짜 생산완료 데이터가 없습니다.</Td></tr>}
+                  </Tbl>
+                  <div style={{marginTop:8,fontSize:12,color:"#a8b8a0"}}>합계: 완제품 {anaPackSelTotalQty.toLocaleString()}개 · 낱개 포장량 <b style={{color:"#4db6ac"}}>{anaPackSelTotalPack.toLocaleString()}개</b></div>
+                  {anaPackSelDetail.some(d=>!d.unitsPerProduct)&&<div style={{marginTop:6,fontSize:11,color:"#e89090"}}>⚠️ BOM이 등록되지 않은 제품은 낱개 포장량이 0으로 계산됩니다. "BOM관리" 탭에서 설정해주세요.</div>}
                 </div>
               )}
             </div>
