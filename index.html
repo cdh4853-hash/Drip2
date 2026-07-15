@@ -963,6 +963,80 @@ function TrendSvgChart({data,color="#6fcf97",unit="",height=170,selected,onSelec
     </div>
   );
 }
+function MultiTrendSvgChart({data,series,unit="",height=190}){
+  // data: [{label,a,b,total}], series: [{key,label,color,dashed}]
+  const W=680,H=height,PAD=32;
+  if(data.length===0)return<div style={{color:"#8a9a88",fontSize:13,textAlign:"center",padding:20}}>데이터가 없습니다.</div>;
+  const allVals=data.flatMap(d=>series.map(s=>d[s.key]||0));
+  const max=Math.max(1,...allVals);
+  const stepX=data.length>1?(W-PAD*2)/(data.length-1):0;
+  const yOf=v=>H-PAD-(v/max)*(H-PAD*2);
+  const xOf=i=>PAD+stepX*i;
+  return(
+    <div style={{width:"100%",overflowX:"auto"}}>
+      <div style={{display:"flex",gap:16,marginBottom:8,fontSize:12,flexWrap:"wrap"}}>
+        {series.map(s=>(
+          <span key={s.key} style={{display:"flex",alignItems:"center",gap:5,color:"#c8c8b8"}}>
+            <span style={{width:14,height:2.5,background:s.color,display:"inline-block",...(s.dashed?{backgroundImage:"repeating-linear-gradient(90deg,"+s.color+" 0,"+s.color+" 4px,transparent 4px,transparent 7px)",background:"none"}:{})}}/>
+            {s.label}
+          </span>
+        ))}
+      </div>
+      <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",height,minWidth:Math.max(360,data.length*44)}}>
+        <line x1={PAD} y1={H-PAD} x2={W-PAD} y2={H-PAD} stroke="#7a8a7044" strokeWidth="1"/>
+        {series.map(s=>{
+          const pts=data.map((d,i)=>({x:xOf(i),y:yOf(d[s.key]||0),v:d[s.key]||0}));
+          const path=pts.map((p,i)=>(i===0?"M":"L")+p.x.toFixed(1)+","+p.y.toFixed(1)).join(" ");
+          return(
+            <g key={s.key}>
+              <path d={path} fill="none" stroke={s.color} strokeWidth={s.dashed?2:2.5} strokeDasharray={s.dashed?"5,4":"none"} opacity={s.dashed?.85:1}/>
+              {pts.map((p,i)=>(<circle key={i} cx={p.x} cy={p.y} r={s.dashed?2.5:3.2} fill={s.color}/>))}
+            </g>
+          );
+        })}
+        {data.map((d,i)=>(<text key={i} x={xOf(i)} y={H-PAD+16} fontSize="10" fill="#8a9a88" textAnchor="middle">{d.label}</text>))}
+      </svg>
+    </div>
+  );
+}
+function PctStackChart({data,height=110}){
+  // data: [{label,a,b}] — 날짜별 A/B 비율(%) 100% 누적 막대
+  const W=680,H=height,PAD=26,barGap=6;
+  if(data.length===0)return<div style={{color:"#8a9a88",fontSize:13,textAlign:"center",padding:20}}>데이터가 없습니다.</div>;
+  const innerW=W-PAD*2;
+  const barW=Math.max(10,Math.min(38,innerW/data.length-barGap));
+  const stepX=data.length>1?innerW/data.length:innerW;
+  const barTop=8,barBottom=H-PAD;
+  const barH=barBottom-barTop;
+  return(
+    <div style={{width:"100%",overflowX:"auto"}}>
+      <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",height,minWidth:Math.max(360,data.length*44)}}>
+        {data.map((d,i)=>{
+          const total=(d.a||0)+(d.b||0);
+          const aPct=total>0?(d.a||0)/total*100:0;
+          const bPct=total>0?(d.b||0)/total*100:0;
+          const x=PAD+stepX*i+(stepX-barW)/2;
+          const aH=total>0?barH*aPct/100:0;
+          const bH=total>0?barH*bPct/100:0;
+          return(
+            <g key={i}>
+              {total===0?(
+                <rect x={x} y={barTop} width={barW} height={barH} fill="#7a8a7022"/>
+              ):(<>
+                <rect x={x} y={barTop} width={barW} height={aH} fill="#6a9a5a"/>
+                <rect x={x} y={barTop+aH} width={barW} height={bH} fill="#5a8fc0"/>
+                {aPct>=12&&<text x={x+barW/2} y={barTop+aH/2+3} fontSize="9" fill="#fff" textAnchor="middle" fontWeight="700">{aPct.toFixed(0)}%</text>}
+                {bPct>=12&&<text x={x+barW/2} y={barTop+aH+bH/2+3} fontSize="9" fill="#fff" textAnchor="middle" fontWeight="700">{bPct.toFixed(0)}%</text>}
+              </>)}
+              <text x={x+barW/2} y={H-8} fontSize="9.5" fill="#8a9a88" textAnchor="middle">{d.label}</text>
+            </g>
+          );
+        })}
+      </svg>
+      <div style={{fontSize:11,color:"#6a7a68",marginTop:2}}>💡 날짜별 A라인(🟢)/B라인(🔵) 비율(%)</div>
+    </div>
+  );
+}
 function DonutChart({data}){
   const total=data.reduce((a,b)=>a+b.value,0)||1;
   let acc=0;
@@ -1049,6 +1123,8 @@ function App(){
   // 완제품 생산 조회: printDate 기준 (5번)
   const[viewDate,setViewDate]=useState(today()); // 조회 날짜
   const[orderTab,setOrderTab]=useState("생산계획"); // 생산계획/생산확정/완료 탭
+  const[doneLineFilter,setDoneLineFilter]=useState("전체"); // 완료 탭 라인 필터: 전체/A/B
+  const[lineAnaSubTab,setLineAnaSubTab]=useState("생산량"); // 라인별생산량 탭: 생산량/낱개포장량
   const[checkedOrders,setCheckedOrders]=useState(new Set());
 
   // 설정 — 업체 관련
@@ -1319,7 +1395,7 @@ function App(){
     }
   };
   useEffect(()=>{
-    if(!user||tab!=="분석")return;
+    if(!user||(tab!=="분석"&&tab!=="라인별생산량"))return;
     const{from,to}=periodRange(anaPeriodType,anaAnchor,anaCustomFrom,anaCustomTo);
     loadAnalysis(from,to);
   },[user,tab,anaPeriodType,anaAnchor,anaCustomFrom,anaCustomTo]);
@@ -1998,6 +2074,31 @@ function App(){
   const anaPackTotal=anaPackDayKeys.reduce((a,d)=>a+anaPackDayMap[d],0);
   const anaPackAvg=anaPackDayKeys.length?anaPackTotal/anaPackDayKeys.length:0;
   const anaPackMax=anaPackDayKeys.length?Math.max(...anaPackDayKeys.map(d=>anaPackDayMap[d])):0;
+  // 라인별(A/B) 일자별 생산량 + 낱개 포장량 집계 — "함께" 보기용 (합계 포함)
+  const anaLineDayMap={}; // {date:{qA,qB,pA,pB}}
+  anaRows.forEach(r=>{
+    const d=(r.plan_date||"").slice(0,10);if(!d)return;
+    const ln=r.line==="B"?"B":"A";
+    const unitsPerProduct=bomOf(r.p_code).reduce((a,c)=>a+(c.qty||0),0);
+    if(!anaLineDayMap[d])anaLineDayMap[d]={qA:0,qB:0,pA:0,pB:0};
+    if(ln==="A"){anaLineDayMap[d].qA+=r.qty||0;anaLineDayMap[d].pA+=(r.qty||0)*unitsPerProduct;}
+    else{anaLineDayMap[d].qB+=r.qty||0;anaLineDayMap[d].pB+=(r.qty||0)*unitsPerProduct;}
+  });
+  const anaLineDayKeys=Object.keys(anaLineDayMap).sort();
+  const anaLineQtyTrend=anaLineDayKeys.map(d=>({date:d,label:d.slice(5).replace("-","/"),a:anaLineDayMap[d].qA,b:anaLineDayMap[d].qB,total:anaLineDayMap[d].qA+anaLineDayMap[d].qB}));
+  const anaLinePackTrend=anaLineDayKeys.map(d=>({date:d,label:d.slice(5).replace("-","/"),a:anaLineDayMap[d].pA,b:anaLineDayMap[d].pB,total:anaLineDayMap[d].pA+anaLineDayMap[d].pB}));
+  const anaLineQtyATotal=anaLineDayKeys.reduce((s,d)=>s+anaLineDayMap[d].qA,0);
+  const anaLineQtyBTotal=anaLineDayKeys.reduce((s,d)=>s+anaLineDayMap[d].qB,0);
+  const anaLinePackATotal=anaLineDayKeys.reduce((s,d)=>s+anaLineDayMap[d].pA,0);
+  const anaLinePackBTotal=anaLineDayKeys.reduce((s,d)=>s+anaLineDayMap[d].pB,0);
+  const anaLineQtySum=anaLineQtyATotal+anaLineQtyBTotal;
+  const anaLineQtyAPct=anaLineQtySum>0?(anaLineQtyATotal/anaLineQtySum*100):0;
+  const anaLineQtyBPct=anaLineQtySum>0?(anaLineQtyBTotal/anaLineQtySum*100):0;
+  const anaLinePackSum=anaLinePackATotal+anaLinePackBTotal;
+  const anaLinePackAPct=anaLinePackSum>0?(anaLinePackATotal/anaLinePackSum*100):0;
+  const anaLinePackBPct=anaLinePackSum>0?(anaLinePackBTotal/anaLinePackSum*100):0;
+  const anaLineSeries=[{key:"a",label:"🟢 A라인",color:"#6a9a5a"},{key:"b",label:"🔵 B라인",color:"#5a8fc0"},{key:"total",label:"⚪ 합계",color:"#f5c97a",dashed:true}];
+
   // 선택한 날짜의 낱개 포장량 근거 — 어떤 완제품을 몇 개 만들었고, 제품당 낱개가 몇 개 들어가는지
   const anaPackSelRows=anaPackSelDay?anaRows.filter(r=>(r.plan_date||"").slice(0,10)===anaPackSelDay):[];
   const anaPackSelMap={};
@@ -2058,8 +2159,8 @@ function App(){
         </div>
         <KstClock/>
         <div style={{marginLeft:"auto",display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
-          {["낱개재고","완제품생산","BOM관리","제품마스터","생산로그","분석","추적","전광판","설정"].map(t=>(
-            <button key={t} onClick={()=>switchTab(t)} style={{padding:"5px 13px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,background:tab===t?(t==="전광판"?"#0d2a18":"#6a8a5a"):"rgba(255,255,255,.1)",color:tab===t?(t==="전광판"?"#00ff88":"#fff"):"#c8c8b8",fontWeight:tab===t?700:400,boxShadow:tab===t&&t==="전광판"?"0 0 8px rgba(0,255,136,.35)":"none"}}>{t==="전광판"?"📺 전광판":t==="분석"?"📊 분석":t==="추적"?"🔍 추적":t}</button>
+          {["낱개재고","완제품생산","BOM관리","제품마스터","생산로그","분석","라인별생산량","추적","전광판","설정"].map(t=>(
+            <button key={t} onClick={()=>switchTab(t)} style={{padding:"5px 13px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,background:tab===t?(t==="전광판"?"#0d2a18":"#6a8a5a"):"rgba(255,255,255,.1)",color:tab===t?(t==="전광판"?"#00ff88":"#fff"):"#c8c8b8",fontWeight:tab===t?700:400,boxShadow:tab===t&&t==="전광판"?"0 0 8px rgba(0,255,136,.35)":"none"}}>{t==="전광판"?"📺 전광판":t==="분석"?"📊 분석":t==="라인별생산량"?"🟢🔵 라인별 생산량":t==="추적"?"🔍 추적":t}</button>
           ))}
           <div style={{marginLeft:6,display:"flex",alignItems:"center",gap:8,padding:"3px 10px",background:"rgba(255,255,255,.07)",borderRadius:20,border:"1px solid #6a8a5a44"}}>
             <span style={{fontSize:11,color:"#a8b8a0"}}>👤 {user.user_id}</span>
@@ -2228,6 +2329,28 @@ function App(){
                 </button>
               ))}
             </div>
+
+            {/* 완료 탭 — 라인 필터 (전체/A라인/B라인) */}
+            {orderTab==="완료"&&(()=>{
+              const doneAll=viewOrders.filter(o=>o.status==="완료");
+              const doneA=doneAll.filter(o=>(o.line||"A")==="A");
+              const doneB=doneAll.filter(o=>o.line==="B");
+              return(
+                <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
+                  <span style={{color:"#a8b8a0",fontSize:13,fontWeight:700}}>라인 필터:</span>
+                  {[
+                    ["전체",doneAll.length,"#6fcf97"],
+                    ["A",doneA.length,"#8ecf90"],
+                    ["B",doneB.length,"#8ac8f0"],
+                  ].map(([l,cnt,color])=>(
+                    <button key={l} onClick={()=>setDoneLineFilter(l)}
+                      style={{background:doneLineFilter===l?color+"33":"rgba(255,255,255,.06)",border:"1px solid "+(doneLineFilter===l?color+"88":"#7a8a7044"),borderRadius:20,color:doneLineFilter===l?color:"#c8c8b8",padding:"5px 16px",fontSize:13,fontWeight:doneLineFilter===l?700:400,cursor:"pointer",fontFamily:"inherit"}}>
+                      {l==="전체"?"⚪ 전체":l==="A"?"🟢 A라인":"🔵 B라인"} <span style={{marginLeft:4,opacity:.8}}>{cnt}건</span>
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
 
             {/* 생산계획 — 다중 선택 */}
             {orderTab==="생산계획"&&viewOrders.filter(o=>o.status==="대기"||o.status==="투입완료").length>0&&(
@@ -2408,13 +2531,17 @@ function App(){
                     const lineAList=confirmedList.filter(o=>(o.line||"A")==="A");
                     const lineBList=confirmedList.filter(o=>o.line==="B");
 
-                    const handleLineSwitch=(order,e)=>{
+                    const handleLineSwitch=async(order,e)=>{
                       e.stopPropagation();
                       const myLine=order.line||"A";
                       const newLine=myLine==="A"?"B":"A";
                       if(!window.confirm(`${myLine}라인 → ${newLine}라인으로 이동하시겠습니까?`))return;
                       setOrders(prev=>prev.map(o=>o.id===order.id?{...o,line:newLine}:o));
-                      sb.from("drip2_orders").update({line:newLine}).eq("id",order.id);
+                      const{error}=await sb.from("drip2_orders").update({line:newLine}).eq("id",order.id);
+                      if(error){
+                        alert("라인 전환 저장 실패: "+error.message);
+                        setOrders(prev=>prev.map(o=>o.id===order.id?{...o,line:myLine}:o));
+                      }
                     };
 
                     const handleRankClick=(order)=>{
@@ -2493,18 +2620,19 @@ function App(){
             )}
 
             {/* 완료 목록 */}
-            {orderTab==="완료"&&(
-              viewOrders.filter(o=>o.status==="완료").length===0
+            {orderTab==="완료"&&(()=>{
+              const doneFiltered=viewOrders.filter(o=>o.status==="완료").filter(o=>doneLineFilter==="전체"||(doneLineFilter==="A"?(o.line||"A")==="A":o.line==="B"));
+              return doneFiltered.length===0
                 ?<div style={{textAlign:"center",color:"#909888",padding:26,fontSize:14}}>완료 주문이 없습니다.</div>
-                :viewOrders.filter(o=>o.status==="완료").map((order,idx,arr)=>(
+                :doneFiltered.map((order,idx,arr)=>(
                   <OrderCard key={order.id} order={order} pName={pName} sName={sName} fmtDate={fmtDate}
                     invest={invest} delOrder={delOrder} updateOrder={updateOrder}
                     confirmOrder={confirmOrder} completeOrder={completeOrder} revertOrder={revertOrder} cancelOrder={cancelOrder}
                     primaryBtn={primaryBtn} delBtn={delBtn}
                     moveOrder={null} isFirst={idx===0} isLast={idx===arr.length-1}
                     channels={channels}/>
-                ))
-            )}
+                ));
+            })()}
           </div>
         )}
 
@@ -2942,6 +3070,147 @@ function App(){
                 {anaChannelStats.length===0&&<tr><Td style={{textAlign:"center",color:"#8a9a88"}} colSpan={4}>데이터가 없습니다.</Td></tr>}
               </Tbl>
             </div>
+          </div>
+        )}
+
+        {/* ════ 라인별생산량 ════ */}
+        {tab==="라인별생산량"&&(
+          <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+              <SecTitle icon="🟢🔵" title="라인별 생산량 / 낱개 포장량"/>
+            </div>
+
+            {/* 기간 선택 */}
+            <div style={{background:"rgba(255,255,255,.05)",border:"1px solid #7a8a7044",borderRadius:10,padding:"12px 16px",marginBottom:16,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+              {["일별","월별","년별","특정기간"].map(pt=>(
+                <button key={pt} onClick={()=>setAnaPeriodType(pt)} style={{padding:"5px 14px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,background:anaPeriodType===pt?"#6a8a5a":"rgba(255,255,255,.1)",color:anaPeriodType===pt?"#fff":"#c8c8b8",fontWeight:anaPeriodType===pt?700:400}}>{pt}</button>
+              ))}
+              {anaPeriodType!=="특정기간"&&(
+                <div style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.06)",border:"1px solid #7a8a7044",borderRadius:20,padding:"3px 6px"}}>
+                  <button onClick={()=>shiftAnaAnchor(-1)} style={{background:"rgba(255,255,255,.1)",border:"none",borderRadius:"50%",width:26,height:26,color:"#f5c97a",cursor:"pointer",fontFamily:"inherit",fontSize:14}}>◀</button>
+                  <span style={{color:"#f5c97a",fontWeight:700,fontSize:14,minWidth:90,textAlign:"center"}}>{anaPeriodLabel}</span>
+                  <button onClick={()=>shiftAnaAnchor(1)} style={{background:"rgba(255,255,255,.1)",border:"none",borderRadius:"50%",width:26,height:26,color:"#f5c97a",cursor:"pointer",fontFamily:"inherit",fontSize:14}}>▶</button>
+                  {anaAnchor!==today()&&<button onClick={()=>setAnaAnchor(today())} style={{background:"rgba(200,130,26,.2)",border:"1px solid #c8821a44",borderRadius:14,color:"#c8a06a",padding:"3px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",marginLeft:4}}>오늘</button>}
+                </div>
+              )}
+              {anaPeriodType==="특정기간"&&(<>
+                <input type="date" value={anaCustomFrom} onChange={e=>setAnaCustomFrom(e.target.value)} style={{...inp,width:150}}/>
+                <span style={{color:"#8a9a88"}}>~</span>
+                <input type="date" value={anaCustomTo} onChange={e=>setAnaCustomTo(e.target.value)} style={{...inp,width:150}}/>
+              </>)}
+              <span style={{fontSize:12,color:"#8a9a88",marginLeft:"auto"}}>
+                {anaLoading?"불러오는 중...":anaFrom+" ~ "+anaTo+" · "+anaRows.length.toLocaleString()+"건"}
+              </span>
+            </div>
+
+            {/* 생산량 / 낱개포장량 서브탭 */}
+            <div style={{display:"flex",gap:0,marginBottom:20,borderBottom:"2px solid #6a8a5a33"}}>
+              {["생산량","낱개포장량"].map(t=>(
+                <button key={t} onClick={()=>setLineAnaSubTab(t)}
+                  style={{background:"none",border:"none",padding:"8px 22px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                    color:lineAnaSubTab===t?"#d8ecca":"#8a9a88",
+                    borderBottom:lineAnaSubTab===t?"2px solid #6fcf97":"2px solid transparent",marginBottom:-2}}>
+                  {t==="생산량"?"📈 생산량":"📦 낱개포장량"}
+                </button>
+              ))}
+            </div>
+
+            {/* ── 생산량 ── */}
+            {lineAnaSubTab==="생산량"&&(<>
+              <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:12}}>
+                <KpiCard icon="🟢" label="A라인 생산량" value={anaLineQtyATotal.toLocaleString()+"개"} sub={anaLineQtyAPct.toFixed(1)+"%"}/>
+                <KpiCard icon="🔵" label="B라인 생산량" value={anaLineQtyBTotal.toLocaleString()+"개"} sub={anaLineQtyBPct.toFixed(1)+"%"}/>
+                <KpiCard icon="⚪" label="합계 생산량" value={anaLineQtySum.toLocaleString()+"개"}/>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:24,fontSize:12}}>
+                <div style={{flex:1,display:"flex",height:22,borderRadius:6,overflow:"hidden",border:"1px solid #7a8a7044"}}>
+                  <div style={{width:anaLineQtyAPct+"%",background:"#6a9a5a",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:11,fontWeight:700}}>{anaLineQtyAPct>=8?anaLineQtyAPct.toFixed(1)+"%":""}</div>
+                  <div style={{width:anaLineQtyBPct+"%",background:"#5a8fc0",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:11,fontWeight:700}}>{anaLineQtyBPct>=8?anaLineQtyBPct.toFixed(1)+"%":""}</div>
+                </div>
+                <span style={{color:"#8ecf90",fontWeight:700,minWidth:88}}>🟢 A {anaLineQtyAPct.toFixed(1)}%</span>
+                <span style={{color:"#8ac8f0",fontWeight:700,minWidth:88}}>🔵 B {anaLineQtyBPct.toFixed(1)}%</span>
+              </div>
+
+              <div style={{marginBottom:26}}>
+                <SecTitle icon="📈" title="라인별 생산량 추이 (A/B/합계)"/>
+                <MultiTrendSvgChart data={anaLineQtyTrend} series={anaLineSeries} unit="개" height={190}/>
+                <div style={{display:"flex",gap:20,marginTop:8,fontSize:13,color:"#a8b8a0",flexWrap:"wrap"}}>
+                  <span>🟢 A라인 총 <b style={{color:"#8ecf90"}}>{anaLineQtyATotal.toLocaleString()}개</b></span>
+                  <span>🔵 B라인 총 <b style={{color:"#8ac8f0"}}>{anaLineQtyBTotal.toLocaleString()}개</b></span>
+                  <span>⚪ 합계 <b style={{color:"#f5c97a"}}>{(anaLineQtyATotal+anaLineQtyBTotal).toLocaleString()}개</b></span>
+                </div>
+              </div>
+
+              <div style={{marginBottom:10}}>
+                <SecTitle icon="📋" title="일자별 생산량 상세"/>
+                <Tbl headers={["날짜","요일","A 생산량","B 생산량","합계 생산량"]}>
+                  {[...anaLineDayKeys].reverse().map(d=>{
+                    const v=anaLineDayMap[d];
+                    const t=v.qA+v.qB;
+                    const aPct=t>0?(v.qA/t*100):0,bPct=t>0?(v.qB/t*100):0;
+                    return(
+                      <tr key={d}>
+                        <Td style={{color:"#f5c97a",fontWeight:600}}>{d}</Td>
+                        <Td>{WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()]}</Td>
+                        <Td style={{color:"#8ecf90"}}>{v.qA.toLocaleString()}개 {t>0&&<span style={{color:"#8a9a88",fontSize:12}}>({aPct.toFixed(1)}%)</span>}</Td>
+                        <Td style={{color:"#8ac8f0"}}>{v.qB.toLocaleString()}개 {t>0&&<span style={{color:"#8a9a88",fontSize:12}}>({bPct.toFixed(1)}%)</span>}</Td>
+                        <Td style={{fontWeight:700}}>{(v.qA+v.qB).toLocaleString()}개</Td>
+                      </tr>
+                    );
+                  })}
+                  {anaLineDayKeys.length===0&&<tr><Td colSpan={7} style={{textAlign:"center",color:"#8a9a88"}}>데이터가 없습니다.</Td></tr>}
+                </Tbl>
+              </div>
+            </>)}
+
+            {/* ── 낱개포장량 ── */}
+            {lineAnaSubTab==="낱개포장량"&&(<>
+              <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:12}}>
+                <KpiCard icon="🟢" label="A라인 낱개포장량" value={anaLinePackATotal.toLocaleString()+"개"} sub={anaLinePackAPct.toFixed(1)+"%"}/>
+                <KpiCard icon="🔵" label="B라인 낱개포장량" value={anaLinePackBTotal.toLocaleString()+"개"} sub={anaLinePackBPct.toFixed(1)+"%"}/>
+                <KpiCard icon="⚪" label="합계 낱개포장량" value={anaLinePackSum.toLocaleString()+"개"}/>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:24,fontSize:12}}>
+                <div style={{flex:1,display:"flex",height:22,borderRadius:6,overflow:"hidden",border:"1px solid #7a8a7044"}}>
+                  <div style={{width:anaLinePackAPct+"%",background:"#6a9a5a",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:11,fontWeight:700}}>{anaLinePackAPct>=8?anaLinePackAPct.toFixed(1)+"%":""}</div>
+                  <div style={{width:anaLinePackBPct+"%",background:"#5a8fc0",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:11,fontWeight:700}}>{anaLinePackBPct>=8?anaLinePackBPct.toFixed(1)+"%":""}</div>
+                </div>
+                <span style={{color:"#8ecf90",fontWeight:700,minWidth:88}}>🟢 A {anaLinePackAPct.toFixed(1)}%</span>
+                <span style={{color:"#8ac8f0",fontWeight:700,minWidth:88}}>🔵 B {anaLinePackBPct.toFixed(1)}%</span>
+              </div>
+
+              <div style={{marginBottom:26}}>
+                <SecTitle icon="📦" title="라인별 낱개 포장량 추이 (A/B/합계)"/>
+                <MultiTrendSvgChart data={anaLinePackTrend} series={anaLineSeries} unit="개" height={190}/>
+                <div style={{display:"flex",gap:20,marginTop:8,fontSize:13,color:"#a8b8a0",flexWrap:"wrap"}}>
+                  <span>🟢 A라인 총 <b style={{color:"#8ecf90"}}>{anaLinePackATotal.toLocaleString()}개</b></span>
+                  <span>🔵 B라인 총 <b style={{color:"#8ac8f0"}}>{anaLinePackBTotal.toLocaleString()}개</b></span>
+                  <span>⚪ 합계 <b style={{color:"#f5c97a"}}>{(anaLinePackATotal+anaLinePackBTotal).toLocaleString()}개</b></span>
+                </div>
+                {anaLinePackTrend.length===0&&<div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>💡 완제품 생산완료 수량 × BOM 구성품 총 수량으로 계산돼요.</div>}
+              </div>
+
+              <div style={{marginBottom:10}}>
+                <SecTitle icon="📋" title="일자별 낱개포장량 상세"/>
+                <Tbl headers={["날짜","요일","A 낱개포장량","B 낱개포장량","합계 낱개포장량"]}>
+                  {[...anaLineDayKeys].reverse().map(d=>{
+                    const v=anaLineDayMap[d];
+                    const t=v.pA+v.pB;
+                    const aPct=t>0?(v.pA/t*100):0,bPct=t>0?(v.pB/t*100):0;
+                    return(
+                      <tr key={d}>
+                        <Td style={{color:"#f5c97a",fontWeight:600}}>{d}</Td>
+                        <Td>{WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()]}</Td>
+                        <Td style={{color:"#8ecf90"}}>{v.pA.toLocaleString()}개 {t>0&&<span style={{color:"#8a9a88",fontSize:12}}>({aPct.toFixed(1)}%)</span>}</Td>
+                        <Td style={{color:"#8ac8f0"}}>{v.pB.toLocaleString()}개 {t>0&&<span style={{color:"#8a9a88",fontSize:12}}>({bPct.toFixed(1)}%)</span>}</Td>
+                        <Td style={{fontWeight:700}}>{(v.pA+v.pB).toLocaleString()}개</Td>
+                      </tr>
+                    );
+                  })}
+                  {anaLineDayKeys.length===0&&<tr><Td colSpan={5} style={{textAlign:"center",color:"#8a9a88"}}>데이터가 없습니다.</Td></tr>}
+                </Tbl>
+              </div>
+            </>)}
           </div>
         )}
 
