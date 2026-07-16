@@ -1176,6 +1176,8 @@ function App(){
       sb.channel('ch').on('postgres_changes',{event:'*',schema:'public',table:'channels'},()=>loadChannels()),
       sb.channel('plog').on('postgres_changes',{event:'INSERT',schema:'public',table:'prod_log'},()=>loadLog()),
       sb.channel('orders_rt').on('postgres_changes',{event:'*',schema:'public',table:'drip2_orders'},()=>{if(!pollPaused.current)loadOrders();}),
+      // ★ 재고 실시간 동기화 — 다른 사용자가 재고를 변경(투입/차감/등록)하면 즉시 반영해 동시 작업 시 오래된 수량 기준으로 차감되는 것을 방지
+      sb.channel('stock_rt').on('postgres_changes',{event:'*',schema:'public',table:'drip2_stock'},()=>{if(!pollPaused.current)loadStock();}),
     ];
     chs.forEach(c=>c.subscribe());
     // ★ 폴링: 5초마다 orders 갱신 (전광판 실시간 반영용)
@@ -1197,7 +1199,10 @@ function App(){
     if(pm){setPMaster(pm);setOrderForm(f=>({...f,pCode:f.pCode&&pm.find(x=>x.code===f.pCode)?f.pCode:pm[0]?.code||""}));setBomPCode(p=>p&&pm.find(x=>x.code===p)?p:pm[0]?.code||"");}
   };
   const loadBom=async()=>{const{data}=await sb.from("drip2_bom").select("*");if(data)setBomData(data);};
-  const loadStock=async()=>{const{data}=await sb.from("drip2_stock").select("*");if(data){const sorted=[...data].sort((a,b)=>a.s_code.localeCompare(b.s_code)||new Date(a.expiry)-new Date(b.expiry));setStock(sorted);}};
+  const sortStock=arr=>[...arr].sort((a,b)=>a.s_code.localeCompare(b.s_code)||new Date(a.expiry)-new Date(b.expiry));
+  // ★ DB에서 최신 재고를 직접 조회 (다른 세션의 변경사항을 놓치지 않기 위함 — 로컬 state에 의존하지 않음)
+  const fetchStock=async()=>{const{data}=await sb.from("drip2_stock").select("*");return data?sortStock(data):stock;};
+  const loadStock=async()=>{setStock(await fetchStock());};
   const loadOrders=async()=>{
     const{data}=await sb.from("drip2_orders").select("*").order("priority");
     if(data)setOrders(prev=>{
@@ -1667,7 +1672,7 @@ function App(){
     if(!dbOrder||dbOrder.status!=="대기")return stockSnap||stock;
     const recipe=bomOf(order.p_code);
     if(!recipe.length){alert("BOM이 설정되지 않은 제품입니다.");return null;}
-    const baseStock=stockSnap||stock;
+    const baseStock=stockSnap||await fetchStock(); // ★ 단건 투입 시 항상 DB 최신 재고 기준으로 계산
     findUnifiedExpiry(baseStock,recipe,order.qty);
     let ws=[...baseStock];const details=[],errors=[];
     for(const comp of recipe){
@@ -1691,16 +1696,28 @@ function App(){
     setStock(ws);
     setOrders(prev=>prev.map(o=>o.id===orderId?{...o,status:"투입완료",detail:{details:detailsWithExp,finExp,hasPending:hasPendingFlag,lot:null,lotKey:null,logId:null},plan_date:order.plan_date}:o));
 
-    // ★ 재고 업데이트 병렬 처리 (순차→병렬)
-    const stockUpdates=ws
-      .filter(row=>{const orig=baseStock.find(s=>s.id===row.id);return orig&&orig.qty!==row.qty;})
-      .map(row=>sb.from("drip2_stock").update({qty:row.qty}).eq("id",row.id));
+    // ★ 재고 업데이트 — 동시수정 감지(compare-and-swap): 읽은 시점의 qty와 현재 DB qty가 같을 때만 갱신
+    const stockUpdatePlans=ws
+      .map(row=>({row,orig:baseStock.find(s=>s.id===row.id)}))
+      .filter(({row,orig})=>orig&&orig.qty!==row.qty);
 
-    // ★ assignLot + 재고업데이트 병렬 실행
-    const[lot]=await Promise.all([
+    // ★ assignLot + 재고업데이트(CAS) 병렬 실행
+    const[lot,stockUpdateResults]=await Promise.all([
       assignLot(finExp,detailsWithExp,order.p_code),
-      ...stockUpdates
+      Promise.all(stockUpdatePlans.map(({row,orig})=>
+        sb.from("drip2_stock").update({qty:row.qty}).eq("id",row.id).eq("qty",orig.qty).select()
+      ))
     ]);
+
+    // ★ 다른 세션이 먼저 같은 재고를 바꿔서 갱신에 실패한 경우 감지 → 되돌리고 재시도 안내
+    const conflict=stockUpdateResults.some(r=>!r.error&&(!r.data||r.data.length===0));
+    if(conflict){
+      const fresh=await fetchStock();
+      setStock(fresh);
+      setOrders(prev=>prev.map(o=>o.id===orderId?{...o,status:"대기",detail:null}:o));
+      alert("⚠️ 다른 사용자가 방금 같은 재고를 먼저 사용했습니다.\n재고를 최신 상태로 다시 불러왔습니다. 다시 투입해주세요.");
+      return fresh;
+    }
 
     const lotKey=makeLotKey(detailsWithExp);
     const workerId=user?.user_id||user?.email||"unknown";
@@ -1735,7 +1752,7 @@ function App(){
     try{
       const pending=viewOrders.filter(o=>o.status==="대기");
       if(!pending.length){alert("대기 중인 주문이 없습니다.");return;}
-      let cur=[...stock];
+      let cur=await fetchStock(); // ★ 배치 시작 전 최신 재고 재조회
       for(const order of pending){cur=await investCore(order.id,cur);if(!cur)break;}
     }finally{
       investAllRunning.current=false;
@@ -2371,7 +2388,7 @@ function App(){
                   if(!ids.length)return alert("대기 상태 항목만 낱개투입할 수 있습니다.");
                   pollPaused.current=true;
                   try{
-                    let cur=[...stock];
+                    let cur=await fetchStock(); // ★ 배치 시작 전 최신 재고 재조회
                     for(const id of ids){cur=await investCore(id,cur);if(!cur)break;}
                   }finally{resumePoll();}
                   setCheckedOrders(new Set());
