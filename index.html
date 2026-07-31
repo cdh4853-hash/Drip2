@@ -637,9 +637,9 @@ function LoginScreen({onLogin}){
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#3a3a38"}}>
       <div style={{background:"#2e2e2c",border:"2px solid #6a8a5a",borderRadius:20,padding:"36px 36px 32px",width:"100%",maxWidth:400,boxShadow:"0 8px 40px rgba(0,0,0,.5)"}}>
         <div style={{textAlign:"center",marginBottom:26}}>
-          <div style={{fontSize:44,marginBottom:8}}>☕</div>
+          <img src="data:image/png;base64,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" alt="MOMOS COFFEE" style={{height:44,marginBottom:12}}/>
           <div style={{fontSize:20,fontWeight:700,color:"#e8f0e0",letterSpacing:1}}>드립백 생산 관리</div>
-          <div style={{fontSize:12,color:"#6fcf97",marginTop:4}}>2차 가공 팀 전용 시스템</div>
+          <div style={{fontSize:12,color:"#6fcf97",marginTop:4}}>제품생산2팀 완제품포장</div>
         </div>
 
         {/* 로그인 폼 */}
@@ -771,7 +771,7 @@ function ProductSearchSelect({pMaster,value,onChange}){
 }
 
 // ══ OrderCard — 수정 시 업체 드롭다운 지원 ═
-function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confirmOrder,completeOrder,revertOrder,cancelOrder,primaryBtn,delBtn,moveOrder,isFirst,isLast,channels}){
+function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confirmOrder,completeOrder,revertOrder,cancelOrder,addExtraQty,primaryBtn,delBtn,moveOrder,isFirst,isLast,channels}){
   const[editing,setEditing]=useState(false);
   const[qty,setQty]=useState(String(order.qty));
   const[editChId,setEditChId]=useState("");
@@ -849,11 +849,12 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
           {order.status==="대기"&&!editing&&<button onClick={()=>invest(order.id)} style={{...primaryBtn,fontSize:13,padding:"5px 14px"}}>낱개 투입</button>}
           {order.status==="투입완료"&&!editing&&<button onClick={()=>confirmOrder(order.id)} style={{background:"linear-gradient(135deg,#7a6020,#b08a30)",border:"1px solid #c8a06a66",color:"#f5e8a0",borderRadius:6,padding:"5px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>📋 생산확정</button>}
           {order.status==="투입완료"&&!editing&&<button onClick={()=>revertOrder(order.id)} style={{background:"rgba(90,130,200,.2)",border:"1px solid #5a8fc055",color:"#8ac8d8",borderRadius:6,padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>↩ 투입회수</button>}
+          {isConfirmed&&!editing&&addExtraQty&&<button onClick={()=>addExtraQty(order.id)} style={{background:"rgba(200,130,26,.22)",border:"1px solid #c8821a66",color:"#f5c97a",borderRadius:6,padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>➕ 추가생산</button>}
           {isConfirmed&&!editing&&<button onClick={()=>completeOrder(order.id)} style={{background:"#2d6a2d",border:"1px solid #4caf5066",color:"#6fcf97",borderRadius:6,padding:"5px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>✅ 완료</button>}
           {/* 복귀 버튼 */}
           {(isDone||isConfirmed)&&!editing&&<button onClick={()=>revertOrder(order.id)} style={{background:"rgba(90,130,200,.2)",border:"1px solid #5a8fc055",color:"#8ac8d8",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>🔄 복귀</button>}
-          {/* 생산취소: 완료 상태에서만 */}
-          {isDone&&!editing&&<button onClick={()=>cancelOrder&&cancelOrder(order.id)} style={{background:"rgba(160,40,40,.3)",border:"1px solid #c0404055",color:"#ff9090",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>🚫 생산취소</button>}
+          {/* 생산취소/삭제: 완료·확정 상태에서 재고 복구 + 로그삭제 + 주문삭제 */}
+          {(isDone||isConfirmed)&&!editing&&<button onClick={()=>cancelOrder&&cancelOrder(order.id)} style={{background:"rgba(160,40,40,.3)",border:"1px solid #c0404055",color:"#ff9090",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>{isDone?"🚫 생산취소":"🗑 삭제"}</button>}
           {isPlan&&!editing&&<button onClick={()=>delOrder(order.id)} style={delBtn}>✕</button>}
         </div>
       </div>
@@ -1774,6 +1775,79 @@ function App(){
     return ws;
   };
   const invest=async(orderId)=>{await investCore(orderId,null);};
+
+  // ── 생산확정 건에 실제 초과 생산분(추가 수량) 반영: 계획 추가 없이 수량+재고차감만 처리 ──
+  const addExtraQty=async(orderId)=>{
+    const order=orders.find(o=>o.id===orderId);if(!order)return;
+    if(order.status!=="확정")return alert("생산확정 상태에서만 추가할 수 있습니다.");
+    const input=window.prompt("실제로 더 생산된 수량을 입력하세요 (예: 30)");
+    if(!input)return;
+    const extra=parseInt(input);
+    if(isNaN(extra)||extra<=0)return alert("올바른 수량을 입력해주세요.");
+    const recipe=bomOf(order.p_code);
+    if(!recipe.length)return alert("BOM이 설정되지 않은 제품입니다.");
+    const baseStock=await fetchStock();
+    let ws=[...baseStock];const newUsed=[];const errors=[];
+    for(const comp of recipe){
+      const need=comp.qty*extra;
+      const{ok,used,next,shortage}=smartDeduct(ws,comp.s_code,need);
+      if(!ok)errors.push("["+sName(comp.s_code)+"] "+shortage+"개 부족");
+      else{ws=next;newUsed.push({sCode:comp.s_code,used,need});}
+    }
+    if(errors.length)return alert("⚠️ 추가 반영 불가 (재고 부족)\n\n"+errors.join("\n"));
+
+    // 기존 detail과 병합 (같은 원료의 소비기한별 사용량 합산)
+    const prevDetails=order.detail?.details||[];
+    const mergedDetails=prevDetails.map(d=>{
+      const add=newUsed.find(n=>n.sCode===d.sCode);
+      if(!add)return d;
+      const usedMap={};
+      [...(d.used||[]),...add.used].forEach(u=>{
+        const key=u.expiry+"_"+u.id;
+        if(usedMap[key])usedMap[key]={...usedMap[key],qty:usedMap[key].qty+u.qty};
+        else usedMap[key]={...u};
+      });
+      const mergedUsedArr=Object.values(usedMap);
+      const newExpiry=mergedUsedArr.length?mergedUsedArr.reduce((min,u)=>new Date(u.expiry)<new Date(min)?u.expiry:min,mergedUsedArr[0].expiry):d.expiry;
+      return{...d,used:mergedUsedArr,total:(d.total||0)+add.need,expiry:newExpiry};
+    });
+    newUsed.forEach(add=>{
+      if(!mergedDetails.find(d=>d.sCode===add.sCode)){
+        const expiry=add.used.length?add.used.reduce((min,u)=>new Date(u.expiry)<new Date(min)?u.expiry:min,add.used[0].expiry):null;
+        mergedDetails.push({sCode:add.sCode,used:add.used,total:add.need,expiry});
+      }
+    });
+    const allExpArr=mergedDetails.map(d=>d.expiry).filter(Boolean);
+    const finExp=allExpArr.length>0?allExpArr.reduce((min,e)=>new Date(e)<new Date(min)?e:min):(order.detail?.finExp||null);
+    const newQty=order.qty+extra;
+    const newDetail={...order.detail,details:mergedDetails,finExp};
+
+    // ★ UI 즉시 반영
+    setStock(ws);
+    setOrders(prev=>prev.map(o=>o.id===orderId?{...o,qty:newQty,detail:newDetail}:o));
+
+    // ★ 재고 DB 반영 (동시수정 감지 CAS)
+    const stockUpdatePlans=ws.map(row=>({row,orig:baseStock.find(s=>s.id===row.id)})).filter(({row,orig})=>orig&&orig.qty!==row.qty);
+    const results=await Promise.all(stockUpdatePlans.map(({row,orig})=>
+      sb.from("drip2_stock").update({qty:row.qty}).eq("id",row.id).eq("qty",orig.qty).select()
+    ));
+    const conflict=results.some(r=>!r.error&&(!r.data||r.data.length===0));
+    if(conflict){
+      const fresh=await fetchStock();
+      setStock(fresh);
+      alert("⚠️ 다른 사용자가 방금 같은 재고를 먼저 사용했습니다.\n재고를 최신 상태로 다시 불러왔습니다. 추가 수량을 다시 반영해주세요.");
+      return;
+    }
+
+    // ★ 주문/생산로그 DB 반영
+    await sb.from("drip2_orders").update({qty:newQty,detail:newDetail}).eq("id",orderId);
+    const logId=order.detail?.logId;
+    if(logId){
+      await sb.from("drip2_prod_log").update({qty:newQty,details:mergedDetails,fin_exp:finExp}).eq("id",logId);
+      setProdLog(prev=>prev.map(l=>l.id===logId?{...l,qty:newQty,details:mergedDetails,fin_exp:finExp}:l));
+    }
+    alert("✅ "+extra+"개가 추가 반영되었습니다. (총 "+newQty+"개)");
+  };
   const investAllRunning=useRef(false);
   const pollPaused=useRef(false); // 투입/삭제 중 폴링 일시정지
   // pollPaused 해제 + 즉시 1회 동기화
@@ -2461,6 +2535,48 @@ function App(){
                     await Promise.all(ids.map(id=>sb.from("drip2_orders").update({status:"확정"}).eq("id",id)));
                   }finally{resumePoll();}
                 }} style={{background:"linear-gradient(135deg,#7a6020,#b08a30)",border:"1px solid #c8a06a66",borderRadius:6,color:"#f5e8a0",padding:"4px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>📋 선택 생산확정 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
+                {/* ★ 선택 회수: 투입완료 → 대기 (낱개 재고 복구) */}
+                <button onClick={()=>{
+                  if(!checkedOrders.size)return alert("회수할 항목을 선택하세요.");
+                  const ids=[...checkedOrders].filter(id=>orders.find(o=>o.id===id)?.status==="투입완료");
+                  if(!ids.length)return alert("투입완료 상태 항목만 회수할 수 있습니다.");
+                  askPw("선택 투입 회수","선택된 "+ids.length+"건의 낱개 재고가 복구되고 대기 상태로 돌아갑니다.",async()=>{
+                    pollPaused.current=true;
+                    try{
+                    // ★ UI 즉시 반영
+                    setOrders(prev=>prev.map(o=>ids.includes(o.id)?{...o,status:"대기",detail:null}:o));
+                    setCheckedOrders(new Set());
+                    // ★ 재고 복구 누적 계산 후 병렬 처리
+                    const stockDelta={};
+                    const logIds=[];
+                    const orderIds=[];
+                    for(const id of ids){
+                      const order=orders.find(o=>o.id===id);if(!order)continue;
+                      if(order.detail?.details){
+                        for(const d of order.detail.details)for(const u of (d.used||[])){
+                          stockDelta[u.id]=(stockDelta[u.id]||0)+u.qty;
+                        }
+                      }
+                      if(order.detail?.logId)logIds.push(order.detail.logId);
+                      orderIds.push(id);
+                    }
+                    const updatedStock=[...stock];
+                    const stockUpdates=Object.entries(stockDelta).map(([sid,delta])=>{
+                      const idx=updatedStock.findIndex(s=>String(s.id)===sid);
+                      if(idx!==-1){const restored=updatedStock[idx].qty+delta;updatedStock[idx]={...updatedStock[idx],qty:restored};return sb.from("drip2_stock").update({qty:restored}).eq("id",sid);}
+                    }).filter(Boolean);
+                    setStock(updatedStock);
+                    // ★ logId + order_id 둘 다로 로그 삭제
+                    setProdLog(prev=>prev.filter(l=>!logIds.includes(l.id)&&!orderIds.includes(l.order_id)));
+                    await Promise.all([
+                      ...stockUpdates,
+                      ...logIds.map(lid=>sb.from("drip2_prod_log").delete().eq("id",lid)),
+                      ...orderIds.filter(oid=>!logIds.length).map(oid=>sb.from("drip2_prod_log").delete().eq("order_id",oid)),
+                      ...ids.map(id=>sb.from("drip2_orders").update({status:"대기",detail:null}).eq("id",id)),
+                    ]);
+                    }finally{resumePoll();}
+                  });
+                }} style={{background:"rgba(90,130,200,.25)",border:"1px solid #5a8fc055",borderRadius:6,color:"#8ac8d8",padding:"4px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>↩ 선택 회수 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
                 <button onClick={()=>{
                   if(!checkedOrders.size)return alert("삭제할 항목을 선택하세요.");
                   askPw("선택 주문 삭제","선택된 "+checkedOrders.size+"건을 삭제합니다. 투입완료 항목은 재고가 복구됩니다.",async()=>{
@@ -2561,6 +2677,46 @@ function App(){
                     }finally{resumePoll();}
                   });
                 }} style={{background:"rgba(90,130,200,.25)",border:"1px solid #5a8fc055",borderRadius:6,color:"#8ac8d8",padding:"4px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>🔄 선택 복귀 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
+                <button onClick={()=>{
+                  if(!checkedOrders.size)return alert("삭제할 항목을 선택하세요.");
+                  askPw("선택 주문 삭제","선택된 "+checkedOrders.size+"건을 삭제합니다. 낱개 재고가 복구됩니다.",async()=>{
+                    pollPaused.current=true;
+                    try{
+                    const ids=[...checkedOrders];
+                    // ★ UI 즉시 반영
+                    setOrders(prev=>prev.filter(o=>!ids.includes(o.id)));
+                    setCheckedOrders(new Set());
+                    // ★ 재고 복구 누적 계산 후 병렬 처리
+                    const stockDelta={};
+                    const logIds=[];
+                    const orderIds=[];
+                    for(const id of ids){
+                      const order=orders.find(o=>o.id===id);if(!order)continue;
+                      if(order.detail?.details){
+                        for(const d of order.detail.details)for(const u of (d.used||[])){
+                          stockDelta[u.id]=(stockDelta[u.id]||0)+u.qty;
+                        }
+                        if(order.detail?.logId)logIds.push(order.detail.logId);
+                        orderIds.push(id);
+                      }
+                    }
+                    const updatedStock=[...stock];
+                    const stockUpdates=Object.entries(stockDelta).map(([sid,delta])=>{
+                      const idx=updatedStock.findIndex(s=>String(s.id)===sid);
+                      if(idx!==-1){const restored=updatedStock[idx].qty+delta;updatedStock[idx]={...updatedStock[idx],qty:restored};return sb.from("drip2_stock").update({qty:restored}).eq("id",sid);}
+                    }).filter(Boolean);
+                    setStock(updatedStock);
+                    // ★ logId + order_id 둘 다로 로그 삭제
+                    setProdLog(prev=>prev.filter(l=>!logIds.includes(l.id)&&!orderIds.includes(l.order_id)));
+                    await Promise.all([
+                      ...stockUpdates,
+                      ...logIds.map(lid=>sb.from("drip2_prod_log").delete().eq("id",lid)),
+                      ...orderIds.filter(oid=>!logIds.length).map(oid=>sb.from("drip2_prod_log").delete().eq("order_id",oid)),
+                      ...ids.map(id=>sb.from("drip2_orders").delete().eq("id",id)),
+                    ]);
+                    }finally{resumePoll();}
+                  });
+                }} style={{background:"rgba(160,60,60,.3)",border:"1px solid #c0606055",borderRadius:6,color:"#f08080",padding:"4px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>🗑 선택 삭제 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
               </div>
             )}
 
@@ -2678,7 +2834,7 @@ function App(){
                             <div style={{flex:1}}>
                               <OrderCard order={order} pName={pName} sName={sName} fmtDate={fmtDate}
                                 invest={invest} delOrder={delOrder} updateOrder={updateOrder}
-                                confirmOrder={confirmOrder} completeOrder={completeOrder} revertOrder={revertOrder} cancelOrder={cancelOrder}
+                                confirmOrder={confirmOrder} completeOrder={completeOrder} revertOrder={revertOrder} cancelOrder={cancelOrder} addExtraQty={addExtraQty}
                                 primaryBtn={primaryBtn} delBtn={delBtn}
                                 moveOrder={null} isFirst={idx===0} isLast={idx===confirmedList.length-1}
                                 channels={channels}/>
