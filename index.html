@@ -174,6 +174,32 @@ function PwModal({title,desc,onConfirm,onClose}){
   );
 }
 
+// ══ 이름 입력 모달 (생산 완료 처리 시 담당자 성함 기록) ═════════════════════════
+function NameModal({title,desc,onConfirm,onClose}){
+  const[name,setName]=useState("");const[err,setErr]=useState(false);
+  const submit=async()=>{
+    const v=name.trim();
+    if(!v){setErr(true);return;}
+    await onConfirm(v);
+  };
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.78)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999}}>
+      <div style={{background:"#2e2e2c",border:"2px solid #6a8a5a",borderRadius:16,padding:"30px 34px",minWidth:300,textAlign:"center",boxShadow:"0 0 40px rgba(76,175,80,.4)"}}>
+        <div style={{fontSize:30,marginBottom:6}}>✅</div>
+        <div style={{color:"#d8ecca",fontWeight:700,fontSize:16,marginBottom:5}}>{title}</div>
+        {desc&&<div style={{color:"#c8a06a",fontSize:12,marginBottom:16}}>{desc}</div>}
+        <input type="text" value={name} autoFocus onChange={e=>{setName(e.target.value);setErr(false);}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="담당자 성함 입력"
+          style={{width:"100%",padding:"9px 13px",borderRadius:8,fontSize:15,background:"rgba(255,255,255,.07)",border:"1px solid "+(err?"#e07070":"#c8821a"),color:"#f0e6d3",outline:"none",marginBottom:6}}/>
+        {err&&<div style={{color:"#e07070",fontSize:12,marginBottom:6}}>❌ 성함을 입력해주세요.</div>}
+        <div style={{display:"flex",gap:8,marginTop:10}}>
+          <button onClick={onClose} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"rgba(255,255,255,.07)",color:"#c8a06a",cursor:"pointer",fontFamily:"inherit"}}>취소</button>
+          <button onClick={submit} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"#2d6a2d",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>확인</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LblInp({label,value,onChange,type="text",placeholder,width}){
   const s={background:"rgba(255,255,255,.1)",border:"1px solid #7a8a7055",borderRadius:6,color:"#f0e6d3",padding:"6px 10px",fontSize:13,outline:"none",width:width||130,fontFamily:"inherit"};
   return(<div><div style={{fontSize:12,color:"#c8a06a",marginBottom:4}}>{label}</div><input type={type} value={value} placeholder={placeholder} onChange={e=>onChange&&onChange(e.target.value)} style={s}/></div>);
@@ -787,7 +813,7 @@ function ProductSearchSelect({pMaster,value,onChange}){
 }
 
 // ══ OrderCard — 수정 시 업체 드롭다운 지원 ═
-function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confirmOrder,completeOrder,revertOrder,cancelOrder,addExtraQty,primaryBtn,delBtn,moveOrder,isFirst,isLast,channels}){
+function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confirmOrder,completeOrder,revertOrder,cancelOrder,addExtraQty,markErpDone,primaryBtn,delBtn,moveOrder,isFirst,isLast,channels}){
   const[editing,setEditing]=useState(false);
   const[qty,setQty]=useState(String(order.qty));
   const[editChId,setEditChId]=useState("");
@@ -843,6 +869,8 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
         <span style={{fontWeight:700,fontSize:15,color:"#f5c97a"}}>{pName(order.p_code)}</span>
         {order.channel&&<ChannelBadge name={order.channel} color={ch?.color} color2={ch?.color2} size="sm"/>}
         {statusChip}
+        {isDone&&order.completed_by&&<span style={{background:"rgba(76,175,80,.15)",border:"1px solid #4caf5044",color:"#a8d8a0",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:600}}>👤 {order.completed_by}</span>}
+        {isDone&&!order.erp_done&&<span style={{background:"rgba(220,120,40,.2)",border:"1px solid #d0803055",color:"#f0b070",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:700}}>⚠ ERP 미입력</span>}
         {editing&&order.status==="대기"?(
           <>
             <input type="number" value={qty} onChange={e=>setQty(e.target.value)} style={{...inpS,width:70}}/>
@@ -867,6 +895,11 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
           {order.status==="투입완료"&&!editing&&<button onClick={()=>revertOrder(order.id)} style={{background:"rgba(90,130,200,.2)",border:"1px solid #5a8fc055",color:"#8ac8d8",borderRadius:6,padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>↩ 투입회수</button>}
           {isConfirmed&&!editing&&addExtraQty&&<button onClick={()=>addExtraQty(order.id)} style={{background:"rgba(200,130,26,.22)",border:"1px solid #c8821a66",color:"#f5c97a",borderRadius:6,padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>➕ 추가생산</button>}
           {isConfirmed&&!editing&&<button onClick={()=>completeOrder(order.id)} style={{background:"#2d6a2d",border:"1px solid #4caf5066",color:"#6fcf97",borderRadius:6,padding:"5px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>✅ 완료</button>}
+          {/* ERP 입력완료 */}
+          {isDone&&!editing&&(order.erp_done
+            ?<span style={{background:"rgba(90,140,220,.2)",border:"1px solid #5a8fc055",color:"#8ac8f0",borderRadius:6,padding:"5px 12px",fontSize:12,fontWeight:700}}>🖥 ERP 완료</span>
+            :<button onClick={()=>markErpDone&&markErpDone(order.id)} style={{background:"linear-gradient(135deg,#4a5a8a,#6a7ac0)",border:"1px solid #5a8fc066",color:"#eaf0ff",borderRadius:6,padding:"5px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>🖥 ERP 입력완료</button>
+          )}
           {/* 복귀 버튼 */}
           {(isDone||isConfirmed)&&!editing&&<button onClick={()=>revertOrder(order.id)} style={{background:"rgba(90,130,200,.2)",border:"1px solid #5a8fc055",color:"#8ac8d8",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>🔄 복귀</button>}
           {/* 생산취소/삭제: 완료·확정 상태에서 재고 복구 + 로그삭제 + 주문삭제 */}
@@ -1124,6 +1157,7 @@ function App(){
   const[channels,setChannels]=useState([]);
   const[loading,setLoading]=useState(true);
   const[pwModal,setPwModal]=useState(null);
+  const[nameModal,setNameModal]=useState(null);
   const xlsxRef=useRef();const prodXlsxRef=useRef();
   const anaDetailRef=useRef(null); // 분석 탭 - 선택일 상세 패널로 자동 스크롤용
   const dragItem=useRef(null); // 드래그 중인 아이템 id
@@ -1153,7 +1187,7 @@ function App(){
   // 완제품 생산 조회: printDate 기준 (5번)
   const[viewDate,setViewDate]=useState(today()); // 조회 날짜
   const[orderTab,setOrderTab]=useState("생산계획"); // 생산계획/생산확정/완료 탭
-  const[doneLineFilter,setDoneLineFilter]=useState("전체"); // 완료 탭 라인 필터: 전체/A/B
+  const[doneLineFilter,setDoneLineFilter]=useState("미입력"); // 완료 탭 라인 필터: 전체/A/B/미입력 — 기본값은 ERP 미입력건
   const[lineAnaSubTab,setLineAnaSubTab]=useState("생산량"); // 라인별생산량 탭: 생산량/낱개포장량
   const[checkedOrders,setCheckedOrders]=useState(new Set());
 
@@ -1614,11 +1648,23 @@ function App(){
       setOrders(prev=>prev.filter(o=>o.id!==id));
     });
   };
-  const completeOrder=async(id)=>{
-    await sb.from("drip2_orders").update({status:"완료"}).eq("id",id);
-    setOrders(prev=>prev.map(o=>o.id===id?{...o,status:"완료"}:o));
-    setCheckedOrders(prev=>{const n=new Set(prev);n.delete(id);return n;});
-    // 탭 이동하지 않음 — 사용자가 직접 탭 전환
+  const completeOrder=(id)=>{
+    setNameModal({title:"생산 완료 처리",desc:"완료 처리한 담당자 성함을 입력해주세요.",onConfirm:async(name)=>{
+      pollPaused.current=true;
+      try{
+        await sb.from("drip2_orders").update({status:"완료",completed_by:name}).eq("id",id);
+        setOrders(prev=>prev.map(o=>o.id===id?{...o,status:"완료",completed_by:name}:o));
+        setCheckedOrders(prev=>{const n=new Set(prev);n.delete(id);return n;});
+      }finally{resumePoll();}
+      // 탭 이동하지 않음 — 사용자가 직접 탭 전환
+    }});
+  };
+  // ERP 입력완료 처리 — 비밀번호 확인 후 처리
+  const markErpDone=(id)=>{
+    askPw("ERP 입력완료","비밀번호를 입력해주세요.",async()=>{
+      await sb.from("drip2_orders").update({erp_done:true}).eq("id",id);
+      setOrders(prev=>prev.map(o=>o.id===id?{...o,erp_done:true}:o));
+    });
   };
   // 투입완료 → 확정
   const confirmOrder=async(id)=>{
@@ -1770,8 +1816,8 @@ function App(){
     }
 
     const lotKey=makeLotKey(detailsWithExp);
-    const workerId=user?.user_id||user?.email||"unknown";
-    const detailWithLog={details:detailsWithExp,finExp,hasPending:hasPendingFlag,lot,lotKey,logId:null};
+    const workerId=user?.name||user?.user_id||user?.email||"unknown";
+    const detailWithLog={details:detailsWithExp,finExp,hasPending:hasPendingFlag,lot,lotKey,logId:null,worker_id:workerId};
 
     // ★ 로그 + 주문상태 업데이트 병렬 처리
     const[{data:logData,error:logError}]=await Promise.all([
@@ -2295,6 +2341,7 @@ function App(){
     <div style={{minHeight:"100vh"}}>
       {showPlanSetting&&<PlanSettingModal/>}
       {pwModal&&<PwModal title={pwModal.title} desc={pwModal.desc} onConfirm={()=>{pwModal.action();setPwModal(null);}} onClose={()=>setPwModal(null)}/>}
+      {nameModal&&<NameModal title={nameModal.title} desc={nameModal.desc} onConfirm={async(name)=>{await nameModal.onConfirm(name);setNameModal(null);}} onClose={()=>setNameModal(null)}/>}
 
       {/* 헤더 */}
       <div style={{background:"linear-gradient(90deg,#2c2c2a,#484844,#2c2c2a)",borderBottom:"2px solid #7a9a6a",padding:"12px 20px",display:"flex",alignItems:"center",gap:12,boxShadow:"0 4px 18px rgba(0,0,0,.35)",flexWrap:"wrap"}}>
@@ -2479,13 +2526,13 @@ function App(){
 
             {/* 다중 선택 */}
             {/* 3단계 탭 */}
-            <div style={{display:"flex",gap:0,marginBottom:14,borderBottom:"2px solid #6a8a5a33"}}>
+            <div style={{display:"flex",gap:0,marginBottom:14,borderBottom:"2px solid #6a8a5a33",alignItems:"center"}}>
               {[
                 ["생산계획", viewOrders.filter(o=>o.status==="대기"||o.status==="투입완료").length, "#f2c94c"],
                 ["생산확정", viewOrders.filter(o=>o.status==="확정").length, "#f5c97a"],
                 ["완료",     viewOrders.filter(o=>o.status==="완료").length, "#6fcf97"],
               ].map(([t,cnt,color])=>(
-                <button key={t} onClick={()=>{setOrderTab(t);setCheckedOrders(new Set());}}
+                <button key={t} onClick={()=>{setOrderTab(t);setCheckedOrders(new Set());if(t==="완료")setDoneLineFilter("미입력");}}
                   style={{background:"none",border:"none",padding:"8px 22px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
                     color:orderTab===t?"#d8ecca":"#8a9a88",
                     borderBottom:orderTab===t?"2px solid "+color:"2px solid transparent",marginBottom:-2}}>
@@ -2493,6 +2540,12 @@ function App(){
                   <span style={{marginLeft:6,fontSize:12,color:orderTab===t?color:"#707870"}}>{cnt}건</span>
                 </button>
               ))}
+              {(()=>{
+                const erpPendingCnt=viewOrders.filter(o=>o.status==="완료"&&!o.erp_done).length;
+                return erpPendingCnt>0
+                  ?<span style={{marginLeft:8,marginBottom:6,background:"rgba(220,120,40,.2)",border:"1px solid #d0803055",color:"#f0b070",borderRadius:20,padding:"3px 12px",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>⚠ ERP 미입력 {erpPendingCnt}건</span>
+                  :null;
+              })()}
             </div>
 
             {/* 완료 탭 — 라인 필터 (전체/A라인/B라인) */}
@@ -2507,10 +2560,11 @@ function App(){
                     ["전체",doneAll.length,"#6fcf97"],
                     ["A",doneA.length,"#8ecf90"],
                     ["B",doneB.length,"#8ac8f0"],
+                    ["미입력",doneAll.filter(o=>!o.erp_done).length,"#f0b070"],
                   ].map(([l,cnt,color])=>(
                     <button key={l} onClick={()=>setDoneLineFilter(l)}
                       style={{background:doneLineFilter===l?color+"33":"rgba(255,255,255,.06)",border:"1px solid "+(doneLineFilter===l?color+"88":"#7a8a7044"),borderRadius:20,color:doneLineFilter===l?color:"#c8c8b8",padding:"5px 16px",fontSize:13,fontWeight:doneLineFilter===l?700:400,cursor:"pointer",fontFamily:"inherit"}}>
-                      {l==="전체"?"⚪ 전체":l==="A"?"🟢 A라인":"🔵 B라인"} <span style={{marginLeft:4,opacity:.8}}>{cnt}건</span>
+                      {l==="전체"?"⚪ 전체":l==="A"?"🟢 A라인":l==="B"?"🔵 B라인":"⚠ ERP 미입력"} <span style={{marginLeft:4,opacity:.8}}>{cnt}건</span>
                     </button>
                   ))}
                 </div>
@@ -2645,15 +2699,17 @@ function App(){
                 <span style={{color:"#a8b8a0",fontSize:13,fontWeight:700}}>다중 선택:</span>
                 <button onClick={()=>checkAll(viewOrders.filter(o=>o.status==="확정").map(o=>o.id))} style={{background:"rgba(255,255,255,.1)",border:"1px solid #7a8a7055",borderRadius:6,color:"#d8ecca",padding:"4px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>☑ 전체</button>
                 <button onClick={uncheckAll} style={{background:"rgba(255,255,255,.1)",border:"1px solid #7a8a7055",borderRadius:6,color:"#d8ecca",padding:"4px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>☐ 해제</button>
-                <button onClick={async()=>{
+                <button onClick={()=>{
                   if(!checkedOrders.size)return alert("항목을 선택하세요.");
                   const ids=[...checkedOrders];
-                  pollPaused.current=true;
-                  try{
-                    setOrders(prev=>prev.map(o=>ids.includes(o.id)?{...o,status:"완료"}:o));
-                    setCheckedOrders(new Set());
-                    await Promise.all(ids.map(id=>sb.from("drip2_orders").update({status:"완료"}).eq("id",id)));
-                  }finally{resumePoll();}
+                  setNameModal({title:"생산 완료 처리",desc:ids.length+"건을 완료 처리합니다. 담당자 성함을 입력해주세요.",onConfirm:async(name)=>{
+                    pollPaused.current=true;
+                    try{
+                      setOrders(prev=>prev.map(o=>ids.includes(o.id)?{...o,status:"완료",completed_by:name}:o));
+                      setCheckedOrders(new Set());
+                      await Promise.all(ids.map(id=>sb.from("drip2_orders").update({status:"완료",completed_by:name}).eq("id",id)));
+                    }finally{resumePoll();}
+                  }});
                 }} style={{background:"linear-gradient(135deg,#2d6a2d,#3a8a3a)",border:"1px solid #4caf5066",borderRadius:6,color:"#6fcf97",padding:"4px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>✅ 선택 완료 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
                 <button onClick={()=>{
                   if(!checkedOrders.size)return alert("복귀할 항목을 선택하세요.");
@@ -2750,6 +2806,7 @@ function App(){
                       <OrderCard order={order} pName={pName} sName={sName} fmtDate={fmtDate}
                         invest={invest} delOrder={delOrder} updateOrder={updateOrder}
                         confirmOrder={confirmOrder} completeOrder={completeOrder} revertOrder={revertOrder} cancelOrder={cancelOrder}
+                        markErpDone={markErpDone}
                         primaryBtn={primaryBtn} delBtn={delBtn}
                         moveOrder={moveOrder} isFirst={idx===0} isLast={idx===arr.length-1}
                         channels={channels}/>
@@ -2854,6 +2911,7 @@ function App(){
                               <OrderCard order={order} pName={pName} sName={sName} fmtDate={fmtDate}
                                 invest={invest} delOrder={delOrder} updateOrder={updateOrder}
                                 confirmOrder={confirmOrder} completeOrder={completeOrder} revertOrder={revertOrder} cancelOrder={cancelOrder} addExtraQty={addExtraQty}
+                                markErpDone={markErpDone}
                                 primaryBtn={primaryBtn} delBtn={delBtn}
                                 moveOrder={null} isFirst={idx===0} isLast={idx===confirmedList.length-1}
                                 channels={channels}/>
@@ -2868,13 +2926,14 @@ function App(){
 
             {/* 완료 목록 */}
             {orderTab==="완료"&&(()=>{
-              const doneFiltered=viewOrders.filter(o=>o.status==="완료").filter(o=>doneLineFilter==="전체"||(doneLineFilter==="A"?(o.line||"A")==="A":o.line==="B"));
+              const doneFiltered=viewOrders.filter(o=>o.status==="완료").filter(o=>doneLineFilter==="전체"?true:doneLineFilter==="미입력"?!o.erp_done:(doneLineFilter==="A"?(o.line||"A")==="A":o.line==="B"));
               return doneFiltered.length===0
                 ?<div style={{textAlign:"center",color:"#909888",padding:26,fontSize:14}}>완료 주문이 없습니다.</div>
                 :doneFiltered.map((order,idx,arr)=>(
                   <OrderCard key={order.id} order={order} pName={pName} sName={sName} fmtDate={fmtDate}
                     invest={invest} delOrder={delOrder} updateOrder={updateOrder}
                     confirmOrder={confirmOrder} completeOrder={completeOrder} revertOrder={revertOrder} cancelOrder={cancelOrder}
+                    markErpDone={markErpDone}
                     primaryBtn={primaryBtn} delBtn={delBtn}
                     moveOrder={null} isFirst={idx===0} isLast={idx===arr.length-1}
                     channels={channels}/>
