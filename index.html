@@ -29,18 +29,29 @@ select option { background: #2e2e2c; color: #f0ede8; }
 
 // ════════════════════════════════════════════
 // ★ 앱 버전 — 배포할 때마다 이 값만 바꾸면, 켜져 있는 모든 화면(전광판 등)이 10분 안에 자동 새로고침됨
-const APP_VERSION="2026-10-06-2";
+const APP_VERSION="2026-10-06-3";
+// 입력 중 끊김 방지: 새 버전이 있어도 "입력칸 사용 중"이거나 "최근 1분 내 조작"이 있으면 기다렸다가 새로고침
 (function autoUpdateCheck(){
+  let lastActive=Date.now(),pending=false;
+  ["mousedown","keydown","touchstart","wheel"].forEach(ev=>document.addEventListener(ev,()=>{lastActive=Date.now();},{passive:true,capture:true}));
+  const isBusy=()=>{
+    const el=document.activeElement;
+    const typing=el&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA"||el.tagName==="SELECT"||el.isContentEditable);
+    return typing||Date.now()-lastActive<60*1000;
+  };
+  const tryReload=()=>{if(pending&&!isBusy())location.reload();};
   const check=async()=>{
     if(document.visibilityState!=="visible")return;
+    if(pending){tryReload();return;}
     try{
       const res=await fetch(location.pathname+"?_v="+Date.now(),{cache:"no-store"});
       if(!res.ok)return;
       const m=(await res.text()).match(/const APP_VERSION="([^"]+)"/);
-      if(m&&m[1]!==APP_VERSION)location.reload();
+      if(m&&m[1]!==APP_VERSION){pending=true;tryReload();}
     }catch(e){}
   };
   setInterval(check,10*60*1000);
+  setInterval(tryReload,30*1000); // 새 버전 대기 중이면 30초마다 "한가한지" 확인
   document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")check();});
 })();
 const SUPABASE_URL = "https://flevmhcogrwagyoxcacs.supabase.co";
