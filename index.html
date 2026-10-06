@@ -28,6 +28,21 @@ select option { background: #2e2e2c; color: #f0ede8; }
 <script type="text/babel">
 
 // ════════════════════════════════════════════
+// ★ 앱 버전 — 배포할 때마다 이 값만 바꾸면, 켜져 있는 모든 화면(전광판 등)이 10분 안에 자동 새로고침됨
+const APP_VERSION="2026-10-06-1";
+(function autoUpdateCheck(){
+  const check=async()=>{
+    if(document.visibilityState!=="visible")return;
+    try{
+      const res=await fetch(location.pathname+"?_v="+Date.now(),{cache:"no-store"});
+      if(!res.ok)return;
+      const m=(await res.text()).match(/const APP_VERSION="([^"]+)"/);
+      if(m&&m[1]!==APP_VERSION)location.reload();
+    }catch(e){}
+  };
+  setInterval(check,10*60*1000);
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")check();});
+})();
 const SUPABASE_URL = "https://flevmhcogrwagyoxcacs.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZsZXZtaGNvZ3J3YWd5b3hjYWNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNDk5ODAsImV4cCI6MjA4NzkyNTk4MH0.eWvh1kjdnG-juv77MMbnmnRSWa22eFP0sZn9r4wHsYg";
 // 삭제 비밀번호 — 설정 탭에서 변경 가능 (localStorage 저장)
@@ -1147,6 +1162,7 @@ function App(){
     setTab(t);
     try{localStorage.setItem("drip2_tab",t);}catch{}
     if(t==="생산로그")loadLog();
+    if(t==="낱개재고"||t==="완제품생산")loadStock(); // 재고는 해당 탭 진입 시 최신화
   };
   const[sMaster,setSMaster]=useState([]);
   const[pMaster,setPMaster]=useState([]);
@@ -1233,21 +1249,26 @@ function App(){
   },[]);
   const handleLogin=u=>{setUser(u);setTab("전광판");try{sessionStorage.setItem("drip2_user",JSON.stringify(u));localStorage.setItem("drip2_tab","전광판");}catch{}};
   const logout=()=>{setUser(null);try{sessionStorage.removeItem("drip2_user");}catch{}};
+  // ★ [DB 부하 개선] Realtime(postgres_changes) 구독 제거 → 가벼운 폴링으로 대체
+  //   - 기존 구독 5개는 존재하지 않는 테이블명(single_master 등)이라 동작하지 않았고,
+  //     drip2_orders/drip2_stock도 Realtime 발행 대상이 아니라 이벤트가 오지 않았음 (DB 부하만 발생)
+  //   - 주문: 30초마다 "진행중 + 최근 7일"만 조회 (전체 이력 3,800건+ 반복 조회 중단)
+  //   - 재고: 60초마다 (전광판 탭 제외) / 투입 시에는 기존대로 DB 최신 재고로 재확인(CAS)
+  //   - 브라우저 탭이 숨겨져 있으면 폴링 중단, 다시 보이면 즉시 1회 갱신
+  const tabRef=useRef(tab);
+  useEffect(()=>{tabRef.current=tab;},[tab]);
   useEffect(()=>{if(!user)return;loadAll();
-    const chs=[
-      sb.channel('sm').on('postgres_changes',{event:'*',schema:'public',table:'single_master'},()=>loadMasters()),
-      sb.channel('pm').on('postgres_changes',{event:'*',schema:'public',table:'product_master'},()=>loadMasters()),
-      sb.channel('bom2').on('postgres_changes',{event:'*',schema:'public',table:'bom'},()=>loadBom()),
-      sb.channel('ch').on('postgres_changes',{event:'*',schema:'public',table:'channels'},()=>loadChannels()),
-      sb.channel('plog').on('postgres_changes',{event:'INSERT',schema:'public',table:'prod_log'},()=>loadLog()),
-      sb.channel('orders_rt').on('postgres_changes',{event:'*',schema:'public',table:'drip2_orders'},()=>{if(!pollPaused.current)loadOrders();}),
-      // ★ 재고 실시간 동기화 — 다른 사용자가 재고를 변경(투입/차감/등록)하면 즉시 반영해 동시 작업 시 오래된 수량 기준으로 차감되는 것을 방지
-      sb.channel('stock_rt').on('postgres_changes',{event:'*',schema:'public',table:'drip2_stock'},()=>{if(!pollPaused.current)loadStock();}),
-    ];
-    chs.forEach(c=>c.subscribe());
-    // ★ 폴링: 5초마다 orders 갱신 (전광판 실시간 반영용)
-    const pollTimer=setInterval(()=>{if(!pollPaused.current)loadOrders();},300000);
-    return()=>{chs.forEach(c=>sb.removeChannel(c));clearInterval(pollTimer);};
+    const ORDER_POLL_MS=30000,STOCK_POLL_MS=60000;
+    const canPoll=()=>!pollPaused.current&&document.visibilityState==="visible";
+    const orderTimer=setInterval(()=>{if(canPoll())loadOrders();},ORDER_POLL_MS);
+    const stockTimer=setInterval(()=>{if(canPoll()&&tabRef.current!=="전광판")loadStock();},STOCK_POLL_MS);
+    const onVisible=()=>{
+      if(document.visibilityState!=="visible"||pollPaused.current)return;
+      loadOrders();
+      if(tabRef.current!=="전광판")loadStock();
+    };
+    document.addEventListener("visibilitychange",onVisible);
+    return()=>{clearInterval(orderTimer);clearInterval(stockTimer);document.removeEventListener("visibilitychange",onVisible);};
   },[user]);
   useEffect(()=>{if(channels.length>0&&!orderForm.channelId)setOrderForm(f=>({...f,channelId:String(channels[0].id)}));},[channels]);
 
@@ -1268,13 +1289,39 @@ function App(){
   // ★ DB에서 최신 재고를 직접 조회 (다른 세션의 변경사항을 놓치지 않기 위함 — 로컬 state에 의존하지 않음)
   const fetchStock=async()=>{const{data}=await sb.from("drip2_stock").select("*");return data?sortStock(data):stock;};
   const loadStock=async()=>{setStock(await fetchStock());};
+  // ★ [DB 부하 개선] 전체 이력 대신 필요한 범위만 조회
+  //   ① 완료 안 된 건(대기/투입완료/확정) 전부  ② 최근 7일 완료 건  ③ 조회 날짜가 7일 이전이면 그 날짜 건
+  const ORDER_WINDOW_DAYS=7;
+  const viewDateRef=useRef(viewDate);
   const loadOrders=async()=>{
-    const{data}=await sb.from("drip2_orders").select("*").order("priority");
-    if(data)setOrders(prev=>{
-      // 데이터 변경 없으면 리렌더 방지
-      if(prev.length===data.length&&JSON.stringify(prev.map(o=>o.id+o.status+o.priority+o.line))===JSON.stringify(data.map(o=>o.id+o.status+o.priority+o.line)))return prev;
+    const cutoff=addDays(today(),-ORDER_WINDOW_DAYS);
+    const vd=viewDateRef.current;
+    const reqs=[
+      sb.from("drip2_orders").select("*").or("status.neq.완료,plan_date.gte."+cutoff+",plan_date.is.null").order("priority"),
+    ];
+    if(vd&&vd<cutoff)reqs.push(sb.from("drip2_orders").select("*").eq("plan_date",vd).order("priority"));
+    const res=await Promise.all(reqs);
+    if(res.some(r=>r.error)){console.error("주문 조회 오류:",res.find(r=>r.error).error.message);return;}
+    const byId=new Map();
+    res.forEach(r=>(r.data||[]).forEach(o=>byId.set(o.id,o)));
+    const data=[...byId.values()].sort((a,b)=>a.priority-b.priority);
+    setOrders(prev=>{
+      // 데이터 변경 없으면 리렌더 방지 (수량·ERP·담당자 변경도 감지)
+      if(prev.length===data.length&&JSON.stringify(prev)===JSON.stringify(data))return prev;
       return data;
     });
+  };
+  // 조회 날짜가 7일 이전으로 바뀌면 그 날짜 주문을 추가로 불러옴
+  useEffect(()=>{
+    viewDateRef.current=viewDate;
+    if(user&&viewDate&&viewDate<addDays(today(),-ORDER_WINDOW_DAYS))loadOrders();
+  },[viewDate]);
+  // 신규 우선순위: 화면에 없는 과거 건까지 고려해 DB 최대값 기준으로 계산
+  const getNextPriority=async()=>{
+    const{data}=await sb.from("drip2_orders").select("priority").order("priority",{ascending:false}).limit(1);
+    const dbMax=data&&data.length?(data[0].priority||0):0;
+    const localMax=orders.length?Math.max(...orders.map(o=>o.priority||0)):0;
+    return Math.max(dbMax,localMax)+1;
   };
   // 생산로그: 최신 300건만 (전체 로드 금지)
   const loadLog=async(from,to)=>{
@@ -1380,7 +1427,7 @@ function App(){
     setTraceLoading(true);setTraceSearched(true);
     // details가 json(비jsonb) 컬럼이라 DB단 contains 필터를 못 써서, 전체 로그를 가져와 클라이언트에서 필터링
     // (재고가 이미 소진/삭제됐어도 생산이력에는 그대로 남아있어 조회 가능)
-    const{data,error}=await sb.from("drip2_prod_log").select("*").order("created_at",{ascending:false});
+    const{data,error}=await sb.from("drip2_prod_log").select("id,p_code,lot,qty,details,created_at,channel").order("created_at",{ascending:false});
     setTraceLoading(false);
     if(error)return alert("조회 오류: "+error.message);
     const logs=(data||[]).filter(log=>(log.details||[]).some(dd=>dd.sCode===traceM.sCode&&(dd.used||[]).some(u=>u.expiry===expNorm)));
@@ -1576,7 +1623,7 @@ function App(){
       const buf=await file.arrayBuffer();const wb=XLSX.read(buf);
       const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:""});
       const toInsert=[],skipped=[],dateErrors=[];
-      const nextPBase=orders.length>0?Math.max(...orders.map(o=>o.priority))+1:1;
+      const nextPBase=await getNextPriority();
       let offset=0;
       for(let i=1;i<rows.length;i++){
         const[rawCo,rawDate,rawCode,,rawQty]=rows[i];
@@ -1615,7 +1662,7 @@ function App(){
     if(!pCode||!qty||parseInt(qty)<=0){orderSubmitting.current=false;return alert("수량을 입력해주세요.");}
     const ch=channels.find(c=>String(c.id)===String(channelId));
     const channelName=ch?.name||"미설정";
-    const nextP=orders.length>0?Math.max(...orders.map(o=>o.priority))+1:1;
+    const nextP=await getNextPriority();
     // ★ UI 즉시 반영
     const tempId="temp_"+Date.now();
     const tempOrder={id:tempId,p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,line:orderForm.line||"A"};
@@ -2359,7 +2406,7 @@ function App(){
         <span style={{fontSize:24}}>☕</span>
         <div>
           <div style={{fontSize:16,fontWeight:700,color:"#e8f0e0",letterSpacing:1}}>드립백 생산 관리 시스템</div>
-          <div style={{fontSize:11,color:"#6fcf97"}}>🟢 실시간 연동 · FIFO · BOM</div>
+          <div style={{fontSize:11,color:"#6fcf97"}}>🟢 자동 동기화(30초) · FIFO · BOM · v{APP_VERSION}</div>
         </div>
         <KstClock/>
         {/* 낱개 총 재고 요약 */}
