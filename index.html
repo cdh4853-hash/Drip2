@@ -29,7 +29,7 @@ select option { background: #2e2e2c; color: #f0ede8; }
 
 // ════════════════════════════════════════════
 // ★ 앱 버전 — 배포할 때마다 이 값만 바꾸면, 켜져 있는 모든 화면(전광판 등)이 10분 안에 자동 새로고침됨
-const APP_VERSION="2026-10-06-1";
+const APP_VERSION="2026-10-06-2";
 (function autoUpdateCheck(){
   const check=async()=>{
     if(document.visibilityState!=="visible")return;
@@ -1252,23 +1252,52 @@ function App(){
   // ★ [DB 부하 개선] Realtime(postgres_changes) 구독 제거 → 가벼운 폴링으로 대체
   //   - 기존 구독 5개는 존재하지 않는 테이블명(single_master 등)이라 동작하지 않았고,
   //     drip2_orders/drip2_stock도 Realtime 발행 대상이 아니라 이벤트가 오지 않았음 (DB 부하만 발생)
-  //   - 주문: 30초마다 "진행중 + 최근 7일"만 조회 (전체 이력 3,800건+ 반복 조회 중단)
-  //   - 재고: 60초마다 (전광판 탭 제외) / 투입 시에는 기존대로 DB 최신 재고로 재확인(CAS)
-  //   - 브라우저 탭이 숨겨져 있으면 폴링 중단, 다시 보이면 즉시 1회 갱신
+  //   - 주문: "진행중 + 최근 7일"만 조회 (전체 이력 반복 조회 중단), 변경 감지 시에만 조회
+  //   - 재고: 변경 감지 시에만 조회 (전광판 탭 제외) / 투입 시에는 기존대로 DB 최신 재고로 재확인(CAS)
+  //   - 브라우저 탭이 숨겨져 있으면 확인 중단, 다시 보이면 즉시 1회 갱신
   const tabRef=useRef(tab);
   useEffect(()=>{tabRef.current=tab;},[tab]);
+  // ★ [변경 감지 동기화] 10초마다 drip2_sync(변경 시각 2줄)만 확인 → 바뀌었을 때만 주문/재고 다시 조회
+  //   - 주문 등록·투입완료·완료처리·삭제 등 drip2_orders가 바뀌면 DB 트리거가 시각 갱신 → 전광판 10초 내 반영
+  //   - 아무 변경 없으면 목록 조회 0회 (여러 명이 켜둬도 DB 부담 거의 없음)
+  //   - 안전장치: 5분마다 1회 전체 갱신 / drip2_sync 테이블이 없거나 오류면 기존 30초 폴링으로 자동 전환
+  const syncRef=useRef({orders:null,stock:null});
   useEffect(()=>{if(!user)return;loadAll();
-    const ORDER_POLL_MS=30000,STOCK_POLL_MS=60000;
+    const SYNC_CHECK_MS=10000,FALLBACK_POLL_MS=30000,SAFETY_REFRESH_MS=5*60*1000;
     const canPoll=()=>!pollPaused.current&&document.visibilityState==="visible";
-    const orderTimer=setInterval(()=>{if(canPoll())loadOrders();},ORDER_POLL_MS);
-    const stockTimer=setInterval(()=>{if(canPoll()&&tabRef.current!=="전광판")loadStock();},STOCK_POLL_MS);
+    let syncOk=true,lastFallback=Date.now(),lastSafety=Date.now(),lastStock=Date.now();
+    const checkSync=async(force)=>{
+      if(!canPoll())return;
+      const now=Date.now();
+      if(syncOk){
+        const{data,error}=await sb.from("drip2_sync").select("key,changed_at");
+        if(error||!data||!data.length){
+          syncOk=false;console.warn("drip2_sync 사용 불가 → 30초 폴링으로 전환",error?.message||"");
+        }else{
+          const m={};data.forEach(r=>{m[r.key]=r.changed_at;});
+          const prev=syncRef.current;
+          const ordersChanged=prev.orders!==null&&m.orders!==prev.orders;
+          const stockChanged=prev.stock!==null&&m.stock!==prev.stock;
+          syncRef.current={orders:m.orders??null,stock:m.stock??null};
+          if(force||ordersChanged||now-lastSafety>=SAFETY_REFRESH_MS){lastSafety=now;loadOrders();}
+          if((force||stockChanged)&&tabRef.current!=="전광판")loadStock();
+          return;
+        }
+      }
+      // 폴백: 기존 방식 (주문 30초 / 재고 60초, 전광판 탭은 재고 제외)
+      if(force||now-lastFallback>=FALLBACK_POLL_MS){
+        lastFallback=now;loadOrders();
+        if(tabRef.current!=="전광판"&&(force||now-lastStock>=60000)){lastStock=now;loadStock();}
+      }
+    };
+    checkSync(false); // 기준 시각 저장 (loadAll이 이미 최신 데이터를 불러옴)
+    const syncTimer=setInterval(()=>checkSync(false),SYNC_CHECK_MS);
     const onVisible=()=>{
       if(document.visibilityState!=="visible"||pollPaused.current)return;
-      loadOrders();
-      if(tabRef.current!=="전광판")loadStock();
+      checkSync(true);
     };
     document.addEventListener("visibilitychange",onVisible);
-    return()=>{clearInterval(orderTimer);clearInterval(stockTimer);document.removeEventListener("visibilitychange",onVisible);};
+    return()=>{clearInterval(syncTimer);document.removeEventListener("visibilitychange",onVisible);};
   },[user]);
   useEffect(()=>{if(channels.length>0&&!orderForm.channelId)setOrderForm(f=>({...f,channelId:String(channels[0].id)}));},[channels]);
 
@@ -2406,7 +2435,7 @@ function App(){
         <span style={{fontSize:24}}>☕</span>
         <div>
           <div style={{fontSize:16,fontWeight:700,color:"#e8f0e0",letterSpacing:1}}>드립백 생산 관리 시스템</div>
-          <div style={{fontSize:11,color:"#6fcf97"}}>🟢 자동 동기화(30초) · FIFO · BOM · v{APP_VERSION}</div>
+          <div style={{fontSize:11,color:"#6fcf97"}}>🟢 변경 감지 동기화(10초) · FIFO · BOM · v{APP_VERSION}</div>
         </div>
         <KstClock/>
         {/* 낱개 총 재고 요약 */}
