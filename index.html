@@ -29,7 +29,12 @@ select option { background: #2e2e2c; color: #f0ede8; }
 
 // ════════════════════════════════════════════
 // ★ 앱 버전 — 배포할 때마다 이 값만 바꾸면, 켜져 있는 모든 화면(전광판 등)이 10분 안에 자동 새로고침됨
-const APP_VERSION="2026-10-06-3";
+const APP_VERSION="2026-10-13-7";
+// 대량납품 업체 판별 (출고업체명이 "대량납품"이면 실제 납품업체명을 별도 입력)
+const BULK_CH="대량납품";
+const isBulkCh=name=>(name||"").trim()===BULK_CH;
+// 화면 표시용 업체명: 대량납품이면 "대량납품 · 업체명"
+const chDisplay=o=>(o&&isBulkCh(o.channel)&&o.bulk_vendor)?o.channel+" · "+o.bulk_vendor:(o?.channel||"-");
 // 입력 중 끊김 방지: 새 버전이 있어도 "입력칸 사용 중"이거나 "최근 1분 내 조작"이 있으면 기다렸다가 새로고침
 (function autoUpdateCheck(){
   let lastActive=Date.now(),pending=false;
@@ -309,8 +314,7 @@ function DashboardView({orders,pMaster,sMaster,channels}){
   const confirmed=[...orders]
     .filter(o=>o.status==="확정"&&(!o.plan_date||(o.plan_date||"").slice(0,10)===todayDate))
     .sort((a,b)=>a.priority-b.priority);
-  const lineA=confirmed.filter(o=>(o.line||"A")==="A");
-  const lineB=confirmed.filter(o=>o.line==="B");
+  // (A/B 라인 구분 폐지 — 확정 목록 하나로 표시)
 
   const pName=code=>(pMaster.find(p=>p.code===code)||{}).name||code;
   const fd=d=>d?String(d).slice(0,10).replace(/-/g,""):"-";
@@ -420,7 +424,7 @@ function DashboardView({orders,pMaster,sMaster,channels}){
                       <span style={{fontSize:FS.name,fontWeight:900,color:"#f0f8f0",lineHeight:1.1,wordBreak:"keep-all"}}>{pName(o.p_code)}</span>
                       <span style={{fontSize:FS.qty,fontWeight:900,color:qtyColor,fontFamily:"monospace",textShadow:isTop?`0 0 14px ${qtyGlow}`:"none",lineHeight:1}}>{o.qty.toLocaleString()}</span>
                       <span style={{fontSize:FS.unit,color:chipLabel}}>개</span>
-                      <span style={{background:chGrad,color:"#fff",border:"2px solid rgba(255,255,255,.55)",borderRadius:6,padding:fullWidth?(isTop?"8px 20px":"4px 12px"):(isTop?"4px 10px":"2px 8px"),fontSize:FS.badge,fontWeight:700,textShadow:"0 1px 3px rgba(0,0,0,.6)",whiteSpace:"nowrap"}}>{o.channel||"-"}</span>
+                      <span style={{background:chGrad,color:"#fff",border:"2px solid rgba(255,255,255,.55)",borderRadius:6,padding:fullWidth?(isTop?"8px 20px":"4px 12px"):(isTop?"4px 10px":"2px 8px"),fontSize:FS.badge,fontWeight:700,textShadow:"0 1px 3px rgba(0,0,0,.6)",whiteSpace:"nowrap"}}>{chDisplay(o)}</span>
                     </div>
 
                     {/* ── 예정일·LOT·소비기한 ── */}
@@ -466,17 +470,12 @@ function DashboardView({orders,pMaster,sMaster,channels}){
       </div>
     );
   };
-  // ── 생산순서 화면 (A만 있으면 전체화면, A+B면 분할) ──
+  // ── 생산순서 화면 (확정 목록 전체 폭) ──
   const ScreenOrder=()=>{
-    const hasA=lineA.length>0;
-    const hasB=lineB.length>0;
     return(
       <div style={{display:"flex",gap:14,alignItems:"flex-start"}}>
-        {hasA&&<LineColumn lineOrders={lineA} lineLabel="🟢 A 라인" accent="green" accentDim={DB_GREEN_DIM} fullWidth={!hasB}/>}
-        {hasA&&hasB&&<div style={{width:2,background:"linear-gradient(180deg,transparent,#3a4a3a,transparent)",flexShrink:0}}/>}
-        {hasB&&<LineColumn lineOrders={lineB} lineLabel="🔵 B 라인" accent="blue" accentDim={DB_BLUE_DIM} fullWidth={!hasA}/>}
-        {!hasA&&!hasB&&(
-          <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,color:"#2a4a2a"}}>
+        {confirmed.length>0?<LineColumn lineOrders={confirmed} lineLabel="📋 생산 순서" accent="green" accentDim={DB_GREEN_DIM} fullWidth={true}/>:(
+          <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,color:"#2a4a2a",minHeight:"50vh"}}>
             <div style={{fontSize:72}}>🏭</div>
             <div style={{fontSize:32,fontWeight:700,letterSpacing:2}}>생산확정 항목 없음</div>
           </div>
@@ -487,10 +486,8 @@ function DashboardView({orders,pMaster,sMaster,channels}){
   // ── 생산현황 화면 ──
   const ScreenStatus=()=>{
     const allDone=[...orders].filter(o=>o.status==="완료"&&(o.plan_date||"").slice(0,10)===todayDate);
-    const lineAQty=lineA.reduce((s,o)=>s+o.qty,0);
-    const lineBQty=lineB.reduce((s,o)=>s+o.qty,0);
-    const totalQty=lineAQty+lineBQty;
-    const maxQtyAll=Math.max(...[...lineA,...lineB].map(o=>o.qty),1);
+    const totalQty=confirmed.reduce((s,o)=>s+o.qty,0);
+    const maxQtyAll=Math.max(...confirmed.map(o=>o.qty),1);
 
     // 업체별 집계
     const chSummary={};
@@ -502,7 +499,7 @@ function DashboardView({orders,pMaster,sMaster,channels}){
     const chSummaryArr=Object.entries(chSummary).sort((a,b)=>b[1].qty-a[1].qty);
 
     // 글자 크기 자동 조절 — 건수 많을수록 작게
-    const totalItems=lineA.length+lineB.length;
+    const totalItems=confirmed.length;
     const nameFontSize=totalItems>10?13:totalItems>6?15:17;
     const qtyFontSize=totalItems>10?16:totalItems>6?18:22;
 
@@ -539,7 +536,7 @@ function DashboardView({orders,pMaster,sMaster,channels}){
                   <div key={o.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",background:"rgba(255,255,255,.04)",borderRadius:7,border:"1px solid rgba(255,255,255,.06)"}}>
                     <span style={{width:20,fontSize:13,fontWeight:700,color:rankColor,fontFamily:"monospace",flexShrink:0}}>{i+1}</span>
                     <span style={{flex:1,fontSize:nameFontSize,fontWeight:700,color:"#d0e8d0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pName(o.p_code)}</span>
-                    <span style={{background:chGrad,color:"#fff",border:"1px solid rgba(255,255,255,.4)",borderRadius:4,padding:"1px 8px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",flexShrink:0}}>{o.channel||"-"}</span>
+                    <span style={{background:chGrad,color:"#fff",border:"1px solid rgba(255,255,255,.4)",borderRadius:4,padding:"1px 8px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",flexShrink:0}}>{chDisplay(o)}</span>
                     <div style={{width:80,height:7,background:"rgba(255,255,255,.07)",borderRadius:4,overflow:"hidden",flexShrink:0}}>
                       <div style={{height:"100%",width:Math.round(o.qty/maxQtyAll*100)+"%",background:`linear-gradient(90deg,${qtyDim},${qtyColor})`,borderRadius:4}}/>
                     </div>
@@ -593,11 +590,9 @@ function DashboardView({orders,pMaster,sMaster,channels}){
             </div>
           </div>
         )}
-        {/* A/B 라인 — 건별 전체 표시 */}
+        {/* 확정 건별 전체 표시 */}
         <div style={{display:"flex",gap:14,alignItems:"flex-start"}}>
-          <LineCol label="🟢 A 라인" accent="green" list={lineA}/>
-          <div style={{width:2,background:"linear-gradient(180deg,transparent,#3a4a3a,transparent)",alignSelf:"stretch",flexShrink:0}}/>
-          <LineCol label="🔵 B 라인" accent="blue" list={lineB}/>
+          <LineCol label="📋 생산확정" accent="green" list={confirmed}/>
         </div>
       </div>
     );
@@ -614,10 +609,7 @@ function DashboardView({orders,pMaster,sMaster,channels}){
         </div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <span style={{background:"rgba(0,255,136,.08)",border:"1px solid rgba(0,255,136,.15)",borderRadius:6,padding:"3px 12px",fontSize:11,color:"#3a6a3a",fontWeight:700}}>
-            🟢 A라인 {lineA.length}건
-          </span>
-          <span style={{background:"rgba(68,170,255,.08)",border:"1px solid rgba(68,170,255,.15)",borderRadius:6,padding:"3px 12px",fontSize:11,color:"#3a5a8a",fontWeight:700}}>
-            🔵 B라인 {lineB.length}건
+            📋 생산확정 {confirmed.length}건
           </span>
           <span style={{fontSize:11,color:"#3a5a3a",fontFamily:"monospace",background:"rgba(0,0,0,.3)",border:"1px solid #2a3a2a",borderRadius:6,padding:"3px 10px"}}>
             {dbScreen==="order"?"📋 생산순서":"📊 현황"} {dbScreen==="order"?ORDER_SEC:STATUS_SEC}s
@@ -843,23 +835,23 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
   const[editing,setEditing]=useState(false);
   const[qty,setQty]=useState(String(order.qty));
   const[editChId,setEditChId]=useState("");
-  const[editLine,setEditLine]=useState(order.line||"A");
+  const[editVendor,setEditVendor]=useState(order.bulk_vendor||"");
   const inpS={background:"rgba(255,255,255,.1)",border:"1px solid #7a8a7055",borderRadius:6,color:"#f0e6d3",padding:"5px 8px",fontSize:13,outline:"none",fontFamily:"inherit"};
   const activeChannels=channels.filter(c=>c.active!==false);
   const startEdit=()=>{
     const cur=channels.find(c=>c.name===order.channel);
     setEditChId(cur?String(cur.id):activeChannels[0]?String(activeChannels[0].id):"");
-    setQty(String(order.qty));setEditLine(order.line||"A");setEditing(true);
+    setQty(String(order.qty));setEditVendor(order.bulk_vendor||"");setEditing(true);
   };
   const saveEdit=()=>{
     const ch=channels.find(c=>String(c.id)===String(editChId));
-    updateOrder(order.id,parseInt(qty)||order.qty,ch?.name||order.channel,editLine);setEditing(false);
+    const chName=ch?.name||order.channel;
+    const vendor=isBulkCh(chName)?editVendor.trim():"";
+    if(isBulkCh(chName)&&!vendor)return alert("대량납품 업체명을 입력해주세요.");
+    updateOrder(order.id,parseInt(qty)||order.qty,chName,vendor||null);setEditing(false);
   };
   const moveBtn={background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",borderRadius:5,color:"#a8b8a0",padding:"3px 7px",fontSize:13,cursor:"pointer",fontFamily:"inherit",lineHeight:1};
   const ch=channels.find(c=>c.name===order.channel);
-  const lineColor=order.line==="B"?"#5a8fc0":"#6a9a5a";
-  const lineBg=order.line==="B"?"rgba(50,100,180,.25)":"rgba(60,120,60,.25)";
-  const lineBorder=order.line==="B"?"#5a8fc055":"#6a9a5a55";
 
   // 3단계 색상
   const isConfirmed=order.status==="확정";
@@ -887,13 +879,10 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
         )}
         {order.plan_date&&<span style={{background:"rgba(90,140,200,.25)",border:"1px solid #5a8fc055",color:"#8ac8d8",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>📅 {order.plan_date}</span>}
         <span style={{background:"#5a7a4a",color:"#fff",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:700}}>P{order.priority}</span>
-        {/* 라인 뱃지 */}
-        <span style={{background:lineBg,border:"1px solid "+lineBorder,color:lineColor,borderRadius:6,padding:"2px 9px",fontSize:12,fontWeight:900,letterSpacing:1}}>
-          {order.line==="B"?"🔵 B라인":"🟢 A라인"}
-        </span>
         <span style={{color:"#9a7050",fontSize:12}}>[{order.p_code}]</span>
         <span style={{fontWeight:700,fontSize:15,color:"#f5c97a"}}>{pName(order.p_code)}</span>
         {order.channel&&<ChannelBadge name={order.channel} color={ch?.color} color2={ch?.color2} size="sm"/>}
+        {isBulkCh(order.channel)&&order.bulk_vendor&&<span style={{background:"rgba(242,201,76,.15)",border:"1px solid #f2c94c66",color:"#f2c94c",borderRadius:6,padding:"2px 9px",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>🏢 {order.bulk_vendor}</span>}
         {statusChip}
         {isDone&&order.completed_by&&<span style={{background:"rgba(76,175,80,.15)",border:"1px solid #4caf5044",color:"#a8d8a0",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:600}}>👤 {order.completed_by}</span>}
         {isDone&&!order.erp_done&&<span style={{background:"rgba(220,120,40,.2)",border:"1px solid #d0803055",color:"#f0b070",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:700}}>⚠ ERP 미입력</span>}
@@ -904,10 +893,9 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
             <select value={editChId} onChange={e=>setEditChId(e.target.value)} style={{...inpS,cursor:"pointer"}}>
               {activeChannels.map(c=><option key={c.id} value={String(c.id)}>{c.name}</option>)}
             </select>
-            <select value={editLine} onChange={e=>setEditLine(e.target.value)} style={{...inpS,cursor:"pointer",width:90}}>
-              <option value="A">🟢 A라인</option>
-              <option value="B">🔵 B라인</option>
-            </select>
+            {isBulkCh(channels.find(c=>String(c.id)===String(editChId))?.name)&&(
+              <input type="text" value={editVendor} onChange={e=>setEditVendor(e.target.value)} placeholder="납품 업체명" style={{...inpS,width:130,border:"1px solid #f2c94c88"}}/>
+            )}
             <button onClick={saveEdit} style={{...primaryBtn,fontSize:12,padding:"4px 12px"}}>저장</button>
             <button onClick={()=>setEditing(false)} style={{...delBtn,fontSize:12,padding:"4px 10px"}}>취소</button>
           </>
@@ -1088,41 +1076,48 @@ function MultiTrendSvgChart({data,series,unit="",height=190}){
     </div>
   );
 }
-function PctStackChart({data,height=110}){
-  // data: [{label,a,b}] — 날짜별 A/B 비율(%) 100% 누적 막대
-  const W=680,H=height,PAD=26,barGap=6;
-  if(data.length===0)return<div style={{color:"#8a9a88",fontSize:13,textAlign:"center",padding:20}}>데이터가 없습니다.</div>;
-  const innerW=W-PAD*2;
-  const barW=Math.max(10,Math.min(38,innerW/data.length-barGap));
-  const stepX=data.length>1?innerW/data.length:innerW;
-  const barTop=8,barBottom=H-PAD;
-  const barH=barBottom-barTop;
+// 세로 누적 막대 차트 — data:[{label,sub,segs:[{key,name,value,color}]}]
+function StackedBarChart({data,unit="개",height=220}){
+  if(!data.length)return<div style={{color:"#8a9a88",fontSize:13,textAlign:"center",padding:20}}>데이터가 없습니다.</div>;
+  const PADT=24,PADB=40,PADX=12;
+  const W=Math.max(680,data.length*56),H=height;
+  const totals=data.map(d=>d.segs.reduce((a,s)=>a+(s.value||0),0));
+  const max=Math.max(1,...totals);
+  const slot=(W-PADX*2)/data.length;
+  const bw=Math.max(14,Math.min(54,slot*0.62));
+  const ch=H-PADT-PADB;
   return(
-    <div style={{width:"100%",overflowX:"auto"}}>
-      <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",height,minWidth:Math.max(360,data.length*44)}}>
+    <div style={{width:"100%",overflowX:"auto",marginBottom:10}}>
+      <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",height:H,minWidth:Math.max(360,data.length*44)}}>
+        <line x1={PADX} y1={H-PADB} x2={W-PADX} y2={H-PADB} stroke="#7a8a7044" strokeWidth="1"/>
         {data.map((d,i)=>{
-          const total=(d.a||0)+(d.b||0);
-          const aPct=total>0?(d.a||0)/total*100:0;
-          const bPct=total>0?(d.b||0)/total*100:0;
-          const x=PAD+stepX*i+(stepX-barW)/2;
-          const aH=total>0?barH*aPct/100:0;
-          const bH=total>0?barH*bPct/100:0;
+          const x=PADX+slot*i+(slot-bw)/2;
+          let y=H-PADB;
           return(
             <g key={i}>
-              {total===0?(
-                <rect x={x} y={barTop} width={barW} height={barH} fill="#7a8a7022"/>
-              ):(<>
-                <rect x={x} y={barTop} width={barW} height={aH} fill="#6a9a5a"/>
-                <rect x={x} y={barTop+aH} width={barW} height={bH} fill="#5a8fc0"/>
-                {aPct>=12&&<text x={x+barW/2} y={barTop+aH/2+3} fontSize="9" fill="#fff" textAnchor="middle" fontWeight="700">{aPct.toFixed(0)}%</text>}
-                {bPct>=12&&<text x={x+barW/2} y={barTop+aH+bH/2+3} fontSize="9" fill="#fff" textAnchor="middle" fontWeight="700">{bPct.toFixed(0)}%</text>}
-              </>)}
-              <text x={x+barW/2} y={H-8} fontSize="9.5" fill="#8a9a88" textAnchor="middle">{d.label}</text>
+              {d.segs.filter(sg=>sg.value>0).map((sg,j)=>{
+                const h=sg.value/max*ch;y-=h;
+                return(<rect key={j} x={x} y={y} width={bw} height={Math.max(h,0.5)} fill={sg.color} rx={1.5}><title>{d.label} · {sg.name}: {Math.round(sg.value).toLocaleString()}{unit}</title></rect>);
+              })}
+              {totals[i]>0&&<text x={x+bw/2} y={H-PADB-totals[i]/max*ch-6} fontSize="11" fill="#e8f0e0" textAnchor="middle" fontWeight="700">{Math.round(totals[i]).toLocaleString()}</text>}
+              <text x={x+bw/2} y={H-PADB+15} fontSize="11" fill="#c8c8b8" textAnchor="middle" fontWeight="700">{d.label}</text>
+              {d.sub&&<text x={x+bw/2} y={H-PADB+29} fontSize="9.5" fill="#8a9a88" textAnchor="middle">{d.sub}</text>}
             </g>
           );
         })}
       </svg>
-      <div style={{fontSize:11,color:"#6a7a68",marginTop:2}}>💡 날짜별 A라인(🟢)/B라인(🔵) 비율(%)</div>
+      <div style={{fontSize:11,color:"#6a7a68"}}>💡 막대에 마우스를 올리면 업체별 수치가 보여요.</div>
+    </div>
+  );
+}
+function ChartLegend({items}){
+  return(
+    <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
+      {items.map(it=>(
+        <span key={it.label} style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:12,color:"#c8c8b8"}}>
+          <span style={{width:11,height:11,borderRadius:3,background:it.color,display:"inline-block"}}/>{it.label}
+        </span>
+      ))}
     </div>
   );
 }
@@ -1168,7 +1163,7 @@ function KpiCard({icon,label,value,sub,color}){
 function App(){
   const[user,setUser]=useState(null);
   const[authLoading,setAuthLoading]=useState(true);
-  const[tab,setTab]=useState(()=>{try{return localStorage.getItem("drip2_tab")||"전광판";}catch{return"전광판";}});
+  const[tab,setTab]=useState(()=>{try{const t=localStorage.getItem("drip2_tab")||"전광판";return t==="라인별생산량"?"분석2":t;}catch{return"전광판";}});
   const switchTab=t=>{
     setTab(t);
     try{localStorage.setItem("drip2_tab",t);}catch{}
@@ -1199,7 +1194,17 @@ function App(){
 
   const[stockForm,setStockForm]=useState({sCode:"",expiry:"",qty:"",isPending:false});
   const[stockFilter,setStockFilter]=useState("ALL");
-  const[orderForm,setOrderForm]=useState({pCode:"",qty:"",channelId:"",line:"A"});
+  // 완제품생산 좌측 낱개재고 사이드바 접기/펼치기 (브라우저에 상태 기억)
+  const[sideStockOpen,setSideStockOpen]=useState(()=>{try{return localStorage.getItem("drip2_sideStockOpen")!=="0";}catch{return true;}});
+  const toggleSideStock=()=>setSideStockOpen(v=>{const n=!v;try{localStorage.setItem("drip2_sideStockOpen",n?"1":"0");}catch{}return n;});
+  // 완제품생산 우측 "금일 가동률" 패널 (접기 상태 기억 + 오늘 인원/근무시간 기록)
+  const[sideUtilOpen,setSideUtilOpen]=useState(()=>{try{return localStorage.getItem("drip2_sideUtilOpen")!=="0";}catch{return true;}});
+  const toggleSideUtil=()=>setSideUtilOpen(v=>{const n=!v;try{localStorage.setItem("drip2_sideUtilOpen",n?"1":"0");}catch{}return n;});
+  const[todayNote,setTodayNote]=useState(null); // drip2_ana_notes 오늘 행 {workers,hours,overtime,note}
+  const[todayDraft,setTodayDraft]=useState({workers:"",hours:8,overtime:0});
+  const[todayEditing,setTodayEditing]=useState(false);
+  const[todaySaving,setTodaySaving]=useState(false);
+  const[orderForm,setOrderForm]=useState({pCode:"",qty:"",channelId:"",bulkVendor:""});
   // planDate: 동적 기본값 (항상 today 기준)
   const[planInfo,setPlanInfo]=useState(()=>{try{const s=localStorage.getItem("planInfo");return s?JSON.parse(s):{planDate:today()};}catch{return{planDate:today()};}});
   const[showPlanSetting,setShowPlanSetting]=useState(false);
@@ -1214,8 +1219,22 @@ function App(){
   // 완제품 생산 조회: printDate 기준 (5번)
   const[viewDate,setViewDate]=useState(today()); // 조회 날짜
   const[orderTab,setOrderTab]=useState("생산계획"); // 생산계획/생산확정/완료 탭
-  const[doneLineFilter,setDoneLineFilter]=useState("미입력"); // 완료 탭 라인 필터: 전체/A/B/미입력 — 기본값은 ERP 미입력건
-  const[lineAnaSubTab,setLineAnaSubTab]=useState("생산량"); // 라인별생산량 탭: 생산량/낱개포장량
+  const[doneLineFilter,setDoneLineFilter]=useState("미입력"); // 완료 탭 필터: 전체/미입력 — 기본값은 ERP 미입력건
+  // ── 분석2 (요일별 생산량 / 업체별 낱개) ──
+  const[a2Metric,setA2Metric]=useState("unit"); // unit: 낱개 기준 / qty: 완제품 기준
+  const[a2Mode,setA2Mode]=useState("avg");      // avg: 생산일 평균 / sum: 합계
+  const[a2SplitBulk,setA2SplitBulk]=useState(false); // 대량납품을 납품업체별로 분리해서 볼지
+  // 분석2 전용 기간 (분석 탭과 별개, 마지막 조회 기간 기억) — 기본: 최근 3개월
+  const[a2Range,setA2Range]=useState(()=>{try{const v=JSON.parse(localStorage.getItem("drip2_a2Range")||"null");if(v&&v.from&&v.to)return v;}catch{}return{from:addDays(today(),-90),to:today()};});
+  const[a2Draft,setA2Draft]=useState(()=>({...a2Range}));
+  const[a2Rows,setA2Rows]=useState([]);
+  const[a2Loading,setA2Loading]=useState(false);
+  const applyA2Range=(from,to)=>{
+    if(!from||!to)return alert("시작일과 종료일을 모두 선택해주세요.");
+    if(from>to)return alert("시작일이 종료일보다 늦어요.");
+    const r={from,to};setA2Range(r);setA2Draft(r);
+    try{localStorage.setItem("drip2_a2Range",JSON.stringify(r));}catch{}
+  };
   const[checkedOrders,setCheckedOrders]=useState(new Set());
 
   // 설정 — 업체 관련
@@ -1310,6 +1329,12 @@ function App(){
     document.addEventListener("visibilitychange",onVisible);
     return()=>{clearInterval(syncTimer);document.removeEventListener("visibilitychange",onVisible);};
   },[user]);
+  useEffect(()=>{
+    if(!user||tab!=="완제품생산")return;
+    loadTodayNote();
+    const t=setInterval(()=>{if(document.visibilityState==="visible"&&!todayEditing)loadTodayNote();},5*60*1000);
+    return()=>clearInterval(t);
+  },[user,tab,todayEditing]);
   useEffect(()=>{if(channels.length>0&&!orderForm.channelId)setOrderForm(f=>({...f,channelId:String(channels[0].id)}));},[channels]);
 
   const loadAll=async()=>{
@@ -1377,20 +1402,61 @@ function App(){
     const{data}=await q.limit(2000);
     if(data)setProdLog(data);
   };
+  // ── 금일 가동률: 오늘 작업자 수/근무시간 (분석 탭과 같은 drip2_ana_notes 사용) ──
+  const loadTodayNote=async()=>{
+    const d=today();
+    const{data,error}=await sb.from("drip2_ana_notes").select("date,note,workers,hours,overtime").eq("date",d).maybeSingle();
+    if(error){console.error("금일 인원 조회 오류:",error.message);return;}
+    setTodayNote(data||null);
+    if(!todayEditing)setTodayDraft({workers:data?.workers??"",hours:data?.hours??8,overtime:data?.overtime??0});
+  };
+  const saveTodayNote=async()=>{
+    const workers=Number(todayDraft.workers),hours=Number(todayDraft.hours),overtime=Number(todayDraft.overtime)||0;
+    if(!todayDraft.workers||isNaN(workers)||workers<=0)return alert("⚠️ 오늘 작업자 수를 입력해주세요.");
+    if(!hours||hours<=0)return alert("⚠️ 근무시간을 입력해주세요.");
+    if(overtime<0)return alert("⚠️ 연장근무 시간은 0 이상이어야 합니다.");
+    setTodaySaving(true);
+    const d=today();
+    const payload={date:d,note:todayNote?.note||null,workers,hours,overtime,updated_at:new Date().toISOString()};
+    const{error}=await sb.from("drip2_ana_notes").upsert(payload,{onConflict:"date"});
+    setTodaySaving(false);
+    if(error)return alert("저장 오류: "+error.message);
+    setTodayNote(payload);setTodayEditing(false);
+    setAnaNoteMap(prev=>prev[d]?{...prev,[d]:{note:payload.note||"",workers,hours,overtime}}:prev);
+  };
   const loadChannels=async()=>{const{data}=await sb.from("drip2_channels").select("*").order("sort_order").order("name");if(data)setChannels(data);};
+
+  // ── 1000행 제한 없이 전부 가져오기 (1000행씩 나눠서 조회) ──
+  const fetchAllRows=async(makeQuery)=>{
+    const PAGE=1000;let all=[],from=0;
+    for(;;){
+      const{data,error}=await makeQuery().range(from,from+PAGE-1);
+      if(error)return{data:null,error};
+      all=all.concat(data||[]);
+      if(!data||data.length<PAGE)return{data:all,error:null};
+      from+=PAGE;
+    }
+  };
+  // ── 분석2: 지정 기간 완료 데이터 ──
+  const loadAnalysis2=async(from,to)=>{
+    setA2Loading(true);
+    const q=cols=>()=>sb.from("drip2_orders").select(cols).eq("status","완료").gte("plan_date",from).lte("plan_date",to).order("plan_date").order("id");
+    let{data,error}=await fetchAllRows(q("p_code,channel,bulk_vendor,qty,plan_date"));
+    if(error&&/bulk_vendor/.test(error.message||"")){({data,error}=await fetchAllRows(q("p_code,channel,qty,plan_date")));}
+    setA2Loading(false);
+    if(error)return console.error("분석2 조회 오류:",error.message);
+    setA2Rows(data||[]);
+  };
 
   // ── 분석: 완료(status="완료") 데이터만, 기간 조건을 SQL에서 먼저 적용 (성능 최적화) ──
   const loadAnalysis=async(from,to)=>{
     setAnaLoading(true);
-    const[{data,error},{data:noteData}]=await Promise.all([
-      sb.from("drip2_orders")
-        .select("p_code,channel,qty,line,plan_date,status")
-        .eq("status","완료")
-        .gte("plan_date",from)
-        .lte("plan_date",to)
-        .order("plan_date"),
+    const qOrders=cols=>fetchAllRows(()=>sb.from("drip2_orders").select(cols).eq("status","완료").gte("plan_date",from).lte("plan_date",to).order("plan_date").order("id"));
+    let[{data,error},{data:noteData}]=await Promise.all([
+      qOrders("p_code,channel,bulk_vendor,qty,plan_date,status"),
       sb.from("drip2_ana_notes").select("date,note,workers,hours,overtime").gte("date",from).lte("date",to)
     ]);
+    if(error&&/bulk_vendor/.test(error.message||"")){({data,error}=await qOrders("p_code,channel,qty,plan_date,status"));}
     if(!error&&data){setAnaRows(data);setAnaSelDay(null);}
     else if(error)console.error("분석 데이터 조회 오류:",error.message);
     const nm={};(noteData||[]).forEach(n=>{nm[n.date]={note:n.note||"",workers:n.workers,hours:n.hours,overtime:n.overtime||0};});
@@ -1523,6 +1589,32 @@ function App(){
     XLSX.writeFile(wb,"생산분석_"+anaFrom+"_"+anaTo+".xlsx");
   };
 
+  // ── 분석2 엑셀 다운로드 (요일별 / 업체×요일 / 업체별 / 일자별) ──
+  const exportAnalysis2Excel=()=>{
+    const wb=XLSX.utils.book_new();
+    const wdRows=[["요일","생산일수","완제품 합계","완제품 일평균","낱개 합계","낱개 일평균","낱개 비중(%)"]];
+    A2_WD.forEach(w=>{const W=a2Wd[w],n=W.days.size;
+      wdRows.push([WEEKDAY_KR[w]+"요일",n,W.qty,n?Math.round(W.qty/n):0,W.unit,n?Math.round(W.unit/n):0,a2TotalUnit?Number((W.unit/a2TotalUnit*100).toFixed(1)):0]);});
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(wdRows),"요일별생산량");
+    ["unit","qty"].forEach(m=>{
+      const lab=m==="unit"?"낱개":"완제품";
+      const rows=[["업체",...A2_WD.map(w=>WEEKDAY_KR[w]+" 합계"),...A2_WD.map(w=>WEEKDAY_KR[w]+" 일평균"),"합계"]];
+      a2ChKeys.forEach(k=>{const C=a2Ch[k];
+        rows.push([k,...A2_WD.map(w=>C.wd[w]?C.wd[w][m]:0),...A2_WD.map(w=>{const n=a2Wd[w].days.size;return n?Math.round((C.wd[w]?C.wd[w][m]:0)/n):0;}),C[m]]);});
+      rows.push(["총 수량",...A2_WD.map(w=>a2Wd[w][m]),...A2_WD.map(w=>{const n=a2Wd[w].days.size;return n?Math.round(a2Wd[w][m]/n):0;}),m==="unit"?a2TotalUnit:a2TotalQty]);
+      XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),"업체x요일_"+lab);
+    });
+    const chRows=[["순위","업체","낱개 합계","낱개 비율(%)","완제품 합계","생산일수","생산일 평균 낱개"]];
+    [...a2ChKeys].sort((a,b)=>a2Ch[b].unit-a2Ch[a].unit).forEach((k,i)=>{const C=a2Ch[k];
+      chRows.push([i+1,k,C.unit,a2TotalUnit?Number((C.unit/a2TotalUnit*100).toFixed(1)):0,C.qty,C.days.size,C.days.size?Math.round(C.unit/C.days.size):0]);});
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(chRows),"업체별낱개");
+    const dRows=[["날짜","요일",...a2ChKeys.map(k=>k+" 낱개"),"낱개 합계","완제품 합계"]];
+    a2DateKeys.forEach(d=>{const D=a2Date[d];
+      dRows.push([d,WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()],...a2ChKeys.map(k=>D.ch[k]?D.ch[k].unit:0),D.unit,D.qty]);});
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(dRows),"일자별업체낱개");
+    XLSX.writeFile(wb,"분석2_"+a2Range.from+"_"+a2Range.to+".xlsx");
+  };
+
   // ── 추적 탭 엑셀 다운로드 (현재 조회된 모드 결과 기준) ──
   const exportTraceExcel=()=>{
     if(traceMode==="p2m"){
@@ -1554,10 +1646,14 @@ function App(){
     }
   };
   useEffect(()=>{
-    if(!user||(tab!=="분석"&&tab!=="라인별생산량"))return;
+    if(!user||tab!=="분석")return;
     const{from,to}=periodRange(anaPeriodType,anaAnchor,anaCustomFrom,anaCustomTo);
     loadAnalysis(from,to);
   },[user,tab,anaPeriodType,anaAnchor,anaCustomFrom,anaCustomTo]);
+  useEffect(()=>{
+    if(!user||tab!=="분석2")return;
+    loadAnalysis2(a2Range.from,a2Range.to);
+  },[user,tab,a2Range]);
   // 일별/월별/년별 기준일 이동 (특정기간 모드에서는 사용 안 함)
   const shiftAnaAnchor=dir=>{
     const d=new Date(anaAnchor+"T00:00:00Z");
@@ -1680,7 +1776,7 @@ function App(){
           if(rawStr&&!pd){dateErrors.push("행"+(i+1)+": '"+rawDate+"' (유효하지 않은 날짜)");continue;}
           if(pd)planDateStr=pd.toISOString().slice(0,10);
         }
-        toInsert.push({p_code:pCode,channel:String(rawCo||"").trim()||"미입력",qty,priority:nextPBase+offset,status:"대기",plan_date:planDateStr,line:"A"});
+        toInsert.push({p_code:pCode,channel:String(rawCo||"").trim()||"미입력",qty,priority:nextPBase+offset,status:"대기",plan_date:planDateStr});
         offset++;
       }
       if(dateErrors.length){alert("❌ 날짜 형식 오류 (YYYYMMDD 8자리 숫자만 허용)\n\n"+dateErrors.join("\n")+"\n\n업로드를 중단합니다.");e.target.value="";return;}
@@ -1702,16 +1798,18 @@ function App(){
     if(!pCode||!qty||parseInt(qty)<=0){orderSubmitting.current=false;return alert("수량을 입력해주세요.");}
     const ch=channels.find(c=>String(c.id)===String(channelId));
     const channelName=ch?.name||"미설정";
+    const bulkVendor=isBulkCh(channelName)?(orderForm.bulkVendor||"").trim():"";
+    if(isBulkCh(channelName)&&!bulkVendor){orderSubmitting.current=false;return alert("대량납품 업체명을 입력해주세요.");}
     const nextP=await getNextPriority();
     // ★ UI 즉시 반영
     const tempId="temp_"+Date.now();
-    const tempOrder={id:tempId,p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,line:orderForm.line||"A"};
+    const tempOrder={id:tempId,p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,bulk_vendor:bulkVendor||null};
     setOrders(prev=>[...prev,tempOrder]);
     setOrderForm(f=>({...f,qty:""}));
     // ★ 잠금 즉시 해제 (빠른 연속 입력 가능)
     orderSubmitting.current=false;
     // ★ DB 저장 백그라운드
-    const{data,error}=await sb.from("drip2_orders").insert({p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,line:orderForm.line||"A"}).select().single();
+    const{data,error}=await sb.from("drip2_orders").insert({p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,bulk_vendor:bulkVendor||null}).select().single();
     if(error){
       setOrders(prev=>prev.filter(o=>o.id!==tempId));
       alert("저장 오류: "+error.message);return;
@@ -1811,7 +1909,12 @@ function App(){
       });
     }
   };
-  const updateOrder=async(id,qty,channel,line)=>{await sb.from("drip2_orders").update({qty,channel,line:line||"A"}).eq("id",id);setOrders(prev=>prev.map(o=>o.id===id?{...o,qty,channel,line:line||"A"}:o));};
+  const updateOrder=async(id,qty,channel,bulkVendor)=>{
+    const upd={qty,channel,bulk_vendor:isBulkCh(channel)?(bulkVendor||null):null};
+    const{error}=await sb.from("drip2_orders").update(upd).eq("id",id);
+    if(error)return alert("수정 오류: "+error.message);
+    setOrders(prev=>prev.map(o=>o.id===id?{...o,...upd}:o));
+  };
 
   // 생산취소: 완료 상태에서 완전 취소 (재고복구 + 로그삭제 + 주문삭제)
   const cancelOrder=id=>{
@@ -2209,10 +2312,7 @@ function App(){
       const ch=channels.find(c=>c.name===o.channel);
       const chColor=ch?.color||"#5a6a5a";
       const chColor2=ch?.color2||null;
-      const companyDisplay=o.channel||"-";
-      const lineLabel=o.line==="B"?"🔵 B라인":"🟢 A라인";
-      const lineColor=o.line==="B"?"#1a5fa8":"#2a7a2a";
-      const lineBadge="<span style='display:inline-block;background:"+lineColor+";color:#fff;border:3px solid rgba(255,255,255,.8);border-radius:8px;padding:6px 16px;font-weight:900;font-size:15px;-webkit-print-color-adjust:exact;print-color-adjust:exact;letter-spacing:.5px;margin-right:8px;'>"+lineLabel+"</span>";
+      const companyDisplay=chDisplay(o);
       const details=(o.detail?.details||[]).map(d=>"<tr><td style='padding:4px 10px;border:1px solid #ccc;'>"+d.sCode+"</td><td style='padding:4px 10px;border:1px solid #ccc;'>"+sName(d.sCode)+"</td><td style='padding:4px 10px;border:1px solid #ccc;text-align:center;'>"+d.total+"개</td><td style='padding:4px 10px;border:1px solid #ccc;text-align:center;'>"+fmtDate(d.expiry)+"</td></tr>").join("");
       const detailTable=o.detail?.details?.length>0?"<table style='width:100%;border-collapse:collapse;margin-top:6px;font-size:12px;'><tr style='background:#f0f0f0;'><th style='padding:4px 10px;border:1px solid #ccc;'>코드</th><th style='padding:4px 10px;border:1px solid #ccc;'>낱개명</th><th style='padding:4px 10px;border:1px solid #ccc;'>수량</th><th style='padding:4px 10px;border:1px solid #ccc;'>소비기한</th></tr>"+details+"</table>":"";
       // 반반 색상 뱃지 (8번, 9번 — 인쇄용 크게)
@@ -2221,7 +2321,7 @@ function App(){
         :chColor;
       const chBadge="<span style='display:inline-block;background:"+badgeBg+";color:#fff;border:3px solid rgba(255,255,255,.8);border-radius:8px;padding:6px 22px;font-weight:700;font-size:17px;-webkit-print-color-adjust:exact;print-color-adjust:exact;text-shadow:0 1px 3px rgba(0,0,0,.6);letter-spacing:.5px;'>"+companyDisplay+"</span>";
       return "<div style='border:2px solid #ccc;border-radius:8px;padding:14px 18px;margin-bottom:16px;page-break-inside:avoid;'>"
-        +"<div style='display:flex;align-items:center;gap:12px;background:#f5f5f5;border-radius:6px;padding:10px 14px;margin-bottom:10px;border:1px solid #ddd;'>"+lineBadge+chBadge
+        +"<div style='display:flex;align-items:center;gap:12px;background:#f5f5f5;border-radius:6px;padding:10px 14px;margin-bottom:10px;border:1px solid #ddd;'>"+chBadge
         +"<span style='background:#5a7a3a;color:#fff;border-radius:5px;padding:4px 12px;font-weight:700;font-size:14px;'>📅 "+(o.plan_date||"-")+"</span>"
         +"</div>"
         +"<div style='display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;'>"
@@ -2356,30 +2456,54 @@ function App(){
   const anaPackTotal=anaPackDayKeys.reduce((a,d)=>a+anaPackDayMap[d],0);
   const anaPackAvg=anaPackDayKeys.length?anaPackTotal/anaPackDayKeys.length:0;
   const anaPackMax=anaPackDayKeys.length?Math.max(...anaPackDayKeys.map(d=>anaPackDayMap[d])):0;
-  // 라인별(A/B) 일자별 생산량 + 낱개 포장량 집계 — "함께" 보기용 (합계 포함)
-  const anaLineDayMap={}; // {date:{qA,qB,pA,pB}}
-  anaRows.forEach(r=>{
+  // ══ 분석2: 요일별 생산량 + 업체별 낱개 (요일별) ══
+  const A2_WD=[1,2,3,4,5,6,0]; // 월~일 순서
+  const a2UnitsOf=code=>bomOf(code).reduce((a,c)=>a+(c.qty||0),0);
+  const a2Key=r=>(a2SplitBulk&&isBulkCh(r.channel)&&r.bulk_vendor)?BULK_CH+" · "+r.bulk_vendor:(r.channel||"미입력");
+  const a2Wd={};A2_WD.forEach(w=>{a2Wd[w]={days:new Set(),qty:0,unit:0,ch:{}};});
+  const a2Ch={};   // {업체:{qty,unit,days:Set,wd:{w:{qty,unit}}}}
+  const a2Date={}; // {날짜:{qty,unit,ch:{업체:{qty,unit}}}}
+  a2Rows.forEach(r=>{
     const d=(r.plan_date||"").slice(0,10);if(!d)return;
-    const ln=r.line==="B"?"B":"A";
-    const unitsPerProduct=bomOf(r.p_code).reduce((a,c)=>a+(c.qty||0),0);
-    if(!anaLineDayMap[d])anaLineDayMap[d]={qA:0,qB:0,pA:0,pB:0};
-    if(ln==="A"){anaLineDayMap[d].qA+=r.qty||0;anaLineDayMap[d].pA+=(r.qty||0)*unitsPerProduct;}
-    else{anaLineDayMap[d].qB+=r.qty||0;anaLineDayMap[d].pB+=(r.qty||0)*unitsPerProduct;}
+    const w=new Date(d+"T00:00:00Z").getUTCDay();
+    const q=r.qty||0,u=q*a2UnitsOf(r.p_code),k=a2Key(r);
+    const W=a2Wd[w];W.days.add(d);W.qty+=q;W.unit+=u;
+    if(!W.ch[k])W.ch[k]={qty:0,unit:0};W.ch[k].qty+=q;W.ch[k].unit+=u;
+    if(!a2Ch[k])a2Ch[k]={qty:0,unit:0,days:new Set(),wd:{}};
+    const C=a2Ch[k];C.qty+=q;C.unit+=u;C.days.add(d);
+    if(!C.wd[w])C.wd[w]={qty:0,unit:0};C.wd[w].qty+=q;C.wd[w].unit+=u;
+    if(!a2Date[d])a2Date[d]={qty:0,unit:0,ch:{}};
+    a2Date[d].qty+=q;a2Date[d].unit+=u;
+    if(!a2Date[d].ch[k])a2Date[d].ch[k]={qty:0,unit:0};a2Date[d].ch[k].qty+=q;a2Date[d].ch[k].unit+=u;
   });
-  const anaLineDayKeys=Object.keys(anaLineDayMap).sort();
-  const anaLineQtyTrend=anaLineDayKeys.map(d=>({date:d,label:d.slice(5).replace("-","/"),a:anaLineDayMap[d].qA,b:anaLineDayMap[d].qB,total:anaLineDayMap[d].qA+anaLineDayMap[d].qB}));
-  const anaLinePackTrend=anaLineDayKeys.map(d=>({date:d,label:d.slice(5).replace("-","/"),a:anaLineDayMap[d].pA,b:anaLineDayMap[d].pB,total:anaLineDayMap[d].pA+anaLineDayMap[d].pB}));
-  const anaLineQtyATotal=anaLineDayKeys.reduce((s,d)=>s+anaLineDayMap[d].qA,0);
-  const anaLineQtyBTotal=anaLineDayKeys.reduce((s,d)=>s+anaLineDayMap[d].qB,0);
-  const anaLinePackATotal=anaLineDayKeys.reduce((s,d)=>s+anaLineDayMap[d].pA,0);
-  const anaLinePackBTotal=anaLineDayKeys.reduce((s,d)=>s+anaLineDayMap[d].pB,0);
-  const anaLineQtySum=anaLineQtyATotal+anaLineQtyBTotal;
-  const anaLineQtyAPct=anaLineQtySum>0?(anaLineQtyATotal/anaLineQtySum*100):0;
-  const anaLineQtyBPct=anaLineQtySum>0?(anaLineQtyBTotal/anaLineQtySum*100):0;
-  const anaLinePackSum=anaLinePackATotal+anaLinePackBTotal;
-  const anaLinePackAPct=anaLinePackSum>0?(anaLinePackATotal/anaLinePackSum*100):0;
-  const anaLinePackBPct=anaLinePackSum>0?(anaLinePackBTotal/anaLinePackSum*100):0;
-  const anaLineSeries=[{key:"a",label:"🟢 A라인",color:"#6a9a5a"},{key:"b",label:"🔵 B라인",color:"#5a8fc0"},{key:"total",label:"⚪ 합계",color:"#f5c97a",dashed:true}];
+  const a2Pick=o=>o?(a2Metric==="unit"?o.unit:o.qty):0;
+  const a2Unit=a2Metric==="unit"?"개(낱개)":"개(완제품)";
+  const a2Fmt=v=>Math.round(v).toLocaleString();
+  // 화면에 보여줄 요일: 월~금은 항상, 토·일은 생산이 있었던 경우만
+  const a2WdShow=A2_WD.filter(w=>(w>=1&&w<=5)||a2Wd[w].days.size>0);
+  const a2WdVal=(w,obj)=>{const n=a2Wd[w].days.size;const v=a2Pick(obj);return a2Mode==="avg"?(n?v/n:0):v;};
+  // 업체 목록 (선택 기준 내림차순) + 색상 (업체 색상 우선, 겹치면 팔레트에서 대체)
+  const a2ChKeys=Object.keys(a2Ch).sort((a,b)=>a2Pick(a2Ch[b])-a2Pick(a2Ch[a]));
+  const a2ChColor={};
+  {const used=new Set();a2ChKeys.forEach((k,i)=>{
+    const base=k.startsWith(BULK_CH+" · ")?BULK_CH:k;
+    let c=channels.find(x=>x.name===base)?.color;
+    if(!c||used.has(c))c=COLORS.find(x=>!used.has(x))||COLORS[i%COLORS.length];
+    used.add(c);a2ChColor[k]=c;
+  });}
+  const a2TotalQty=a2Rows.reduce((a,r)=>a+(r.qty||0),0);
+  const a2TotalUnit=Object.values(a2Ch).reduce((a,c)=>a+c.unit,0);
+  const a2TotalPick=a2Metric==="unit"?a2TotalUnit:a2TotalQty;
+  const a2DateKeys=Object.keys(a2Date).sort();
+  const a2ProdDays=a2DateKeys.length;
+  const a2BestWd=[...A2_WD].filter(w=>a2Wd[w].days.size>0).sort((a,b)=>(a2Pick(a2Wd[b])/a2Wd[b].days.size)-(a2Pick(a2Wd[a])/a2Wd[a].days.size))[0];
+  const a2NoBom=[...new Set(a2Rows.filter(r=>!a2UnitsOf(r.p_code)).map(r=>r.p_code))];
+  // 차트 데이터
+  const a2WdChart=a2WdShow.map(w=>({label:WEEKDAY_KR[w],sub:a2Wd[w].days.size+"일",segs:[{key:"전체",name:"전체",value:a2WdVal(w,a2Wd[w]),color:a2Metric==="unit"?"#4db6ac":"#f5c97a"}]}));
+  const a2WdChChart=a2WdShow.map(w=>({label:WEEKDAY_KR[w],sub:a2Wd[w].days.size+"일",segs:a2ChKeys.map(k=>({key:k,name:k,value:a2WdVal(w,a2Wd[w].ch[k]),color:a2ChColor[k]}))}));
+  const a2DateChart=a2DateKeys.map(d=>({label:d.slice(5).replace("-","/"),sub:WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()],segs:a2ChKeys.map(k=>({key:k,name:k,value:a2Pick(a2Date[d].ch[k]),color:a2ChColor[k]}))}));
+  // 업체×요일 히트맵 최대값
+  const a2HeatMax=Math.max(1,...a2ChKeys.flatMap(k=>a2WdShow.map(w=>a2WdVal(w,a2Ch[k].wd[w]))));
 
   // 선택한 날짜의 낱개 포장량 근거 — 어떤 완제품을 몇 개 만들었고, 제품당 낱개가 몇 개 들어가는지
   const anaPackSelRows=anaPackSelDay?anaRows.filter(r=>(r.plan_date||"").slice(0,10)===anaPackSelDay):[];
@@ -2433,6 +2557,24 @@ function App(){
     return{label:k,value,unit,rate,unitRate,diff:unitRate-rate,noBom:!!anaChannelNoBom[k],color:ch?.color||"#556655",color2:ch?.color2||null};
   }).sort((a,b)=>anaChSort==="unit"?(b.unit-a.unit):(b.value-a.value));
 
+  // ── 금일 가동률 계산 (오늘 plan_date 주문 기준) ──
+  const tdStr=today();
+  const tdOrders=orders.filter(o=>(o.plan_date||"").slice(0,10)===tdStr&&!String(o.id).startsWith("temp_"));
+  const tdHoursOf=o=>secToHour((o.qty||0)*speedOf(o.p_code));
+  const tdDone=tdOrders.filter(o=>o.status==="완료");
+  const tdConfirmed=tdOrders.filter(o=>o.status==="확정");
+  const tdDoneH=tdDone.reduce((a,o)=>a+tdHoursOf(o),0);
+  const tdConfH=tdConfirmed.reduce((a,o)=>a+tdHoursOf(o),0);
+  const tdPlanH=tdOrders.reduce((a,o)=>a+tdHoursOf(o),0); // 대기+투입완료+확정+완료 전체
+  const tdDoneQty=tdDone.reduce((a,o)=>a+(o.qty||0),0);
+  const tdPlanQty=tdOrders.reduce((a,o)=>a+(o.qty||0),0);
+  const tdDonePack=tdDone.reduce((a,o)=>a+(o.qty||0)*bomOf(o.p_code).reduce((s,c)=>s+(c.qty||0),0),0);
+  const tdNoSpeed=[...new Set(tdOrders.filter(o=>!speedOf(o.p_code)).map(o=>o.p_code))];
+  const tdAvail=(todayNote&&todayNote.workers!=null&&todayNote.hours!=null)?(Number(todayNote.workers)*Number(todayNote.hours)+(Number(todayNote.overtime)||0)):null;
+  const tdRate=tdAvail?tdDoneH/tdAvail*100:null;      // 실적 가동률 (완료 기준)
+  const tdPlanRate=tdAvail?tdPlanH/tdAvail*100:null;  // 계획 가동률 (오늘 등록 전체 기준)
+  const rateColor=r=>r==null?"#8a9a88":r>=80?"#6fcf97":r>=50?"#f5c97a":"#e89090";
+
   // ──────────────────────────────────────
 
   return(
@@ -2469,8 +2611,8 @@ function App(){
           );
         })()}
         <div style={{marginLeft:"auto",display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
-          {["낱개재고","완제품생산","BOM관리","제품마스터","생산로그","분석","라인별생산량","추적","전광판","설정"].map(t=>(
-            <button key={t} onClick={()=>switchTab(t)} style={{padding:"5px 13px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,background:tab===t?(t==="전광판"?"#0d2a18":"#6a8a5a"):"rgba(255,255,255,.1)",color:tab===t?(t==="전광판"?"#00ff88":"#fff"):"#c8c8b8",fontWeight:tab===t?700:400,boxShadow:tab===t&&t==="전광판"?"0 0 8px rgba(0,255,136,.35)":"none"}}>{t==="전광판"?"📺 전광판":t==="분석"?"📊 분석":t==="라인별생산량"?"🟢🔵 라인별 생산량":t==="추적"?"🔍 추적":t}</button>
+          {["낱개재고","완제품생산","BOM관리","제품마스터","생산로그","분석","분석2","추적","전광판","설정"].map(t=>(
+            <button key={t} onClick={()=>switchTab(t)} style={{padding:"5px 13px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,background:tab===t?(t==="전광판"?"#0d2a18":"#6a8a5a"):"rgba(255,255,255,.1)",color:tab===t?(t==="전광판"?"#00ff88":"#fff"):"#c8c8b8",fontWeight:tab===t?700:400,boxShadow:tab===t&&t==="전광판"?"0 0 8px rgba(0,255,136,.35)":"none"}}>{t==="전광판"?"📺 전광판":t==="분석"?"📊 분석":t==="분석2"?"📊 분석2":t==="추적"?"🔍 추적":t}</button>
           ))}
           <div style={{marginLeft:6,display:"flex",alignItems:"center",gap:8,padding:"3px 10px",background:"rgba(255,255,255,.07)",borderRadius:20,border:"1px solid #6a8a5a44"}}>
             <span style={{fontSize:11,color:"#a8b8a0"}}>👤 {user.user_id}</span>
@@ -2486,10 +2628,97 @@ function App(){
         </div>
       )}
 
+      {/* ════ 완제품생산 전용: 우측 여백에 금일 가동률 패널 ════ */}
+      {tab==="완제품생산"&&!sideUtilOpen&&(
+        <button onClick={toggleSideUtil} title="금일 가동률 펼치기"
+          style={{position:"fixed",right:"max(14px, calc(50% - 886px))",top:96,zIndex:5,background:"rgba(46,46,44,.95)",border:"1px solid #7a8a7066",borderRadius:12,padding:"12px 8px",cursor:"pointer",fontFamily:"inherit",color:"#c8ddb8",fontSize:13,fontWeight:700,display:"flex",flexDirection:"column",alignItems:"center",gap:6,boxShadow:"0 4px 14px rgba(0,0,0,.35)"}}>
+          <span style={{color:"#f5c97a",fontSize:14}}>◀</span>
+          <span>📈</span>
+          <span style={{writingMode:"vertical-rl",letterSpacing:2}}>금일 가동률</span>
+          {tdRate!=null&&<span style={{color:rateColor(tdRate),fontSize:12,writingMode:"vertical-rl"}}>{tdRate.toFixed(0)}%</span>}
+        </button>
+      )}
+      {tab==="완제품생산"&&sideUtilOpen&&(
+        <div style={{position:"fixed",right:"max(14px, calc(50% - 886px))",top:96,width:220,maxHeight:"calc(100vh - 116px)",overflowY:"auto",background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"14px 12px",zIndex:5}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:6}}>
+            <div style={{fontSize:13,fontWeight:700,color:"#c8ddb8"}}>📈 금일 가동률</div>
+            <button onClick={toggleSideUtil} title="접기"
+              style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7055",borderRadius:6,color:"#f5c97a",padding:"2px 8px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700,flexShrink:0}}>접기 ▶</button>
+          </div>
+          <div style={{fontSize:11,color:"#8a9a88",marginBottom:10}}>{tdStr} ({WEEKDAY_KR[new Date(tdStr+"T00:00:00Z").getUTCDay()]}) · 완료 기준</div>
+
+          {/* 실적 가동률 */}
+          <div style={{background:"rgba(0,0,0,.25)",border:"1px solid "+rateColor(tdRate)+"55",borderRadius:10,padding:"12px 10px",textAlign:"center",marginBottom:8}}>
+            <div style={{fontSize:11,color:"#a8b8a0",marginBottom:2}}>실적 가동률</div>
+            <div style={{fontSize:34,fontWeight:900,color:rateColor(tdRate),fontVariantNumeric:"tabular-nums",lineHeight:1.1}}>{tdRate!=null?tdRate.toFixed(1):"-"}<span style={{fontSize:15}}>%</span></div>
+            <div style={{height:7,background:"rgba(255,255,255,.08)",borderRadius:4,overflow:"hidden",marginTop:8,position:"relative"}}>
+              {tdPlanRate!=null&&<div style={{position:"absolute",inset:0,width:Math.min(tdPlanRate,100)+"%",background:"rgba(245,201,122,.25)"}}/>}
+              <div style={{position:"absolute",inset:0,width:Math.min(tdRate||0,100)+"%",background:rateColor(tdRate)}}/>
+            </div>
+            <div style={{fontSize:11,color:"#8a9a88",marginTop:6}}>계획 포함 시 <b style={{color:rateColor(tdPlanRate)}}>{tdPlanRate!=null?tdPlanRate.toFixed(1)+"%":"-"}</b></div>
+          </div>
+
+          {/* 시간 근거 */}
+          <div style={{display:"flex",flexDirection:"column",gap:4,fontSize:12,color:"#a8b8a0",background:"rgba(255,255,255,.04)",borderRadius:8,padding:"8px 10px",marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span>✅ 완료 생산시간</span><b style={{color:"#e8f0e0"}}>{tdDoneH.toFixed(2)}h</b></div>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span>📋 확정(진행중)</span><b style={{color:"#f5c97a"}}>{tdConfH.toFixed(2)}h</b></div>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span>🗓 오늘 계획 전체</span><b style={{color:"#e8f0e0"}}>{tdPlanH.toFixed(2)}h</b></div>
+            <div style={{display:"flex",justifyContent:"space-between",borderTop:"1px solid #7a8a7033",paddingTop:4,marginTop:2}}><span>👥 가용시간</span><b style={{color:tdAvail?"#f5c97a":"#e89090"}}>{tdAvail?tdAvail.toLocaleString()+"h":"미입력"}</b></div>
+          </div>
+
+          {/* 수량 */}
+          <div style={{display:"flex",flexDirection:"column",gap:4,fontSize:12,color:"#a8b8a0",background:"rgba(255,255,255,.04)",borderRadius:8,padding:"8px 10px",marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span>완료 / 계획</span><b style={{color:"#e8f0e0"}}>{tdDoneQty.toLocaleString()} / {tdPlanQty.toLocaleString()}개</b></div>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span>낱개 포장량</span><b style={{color:"#4db6ac"}}>{tdDonePack.toLocaleString()}개</b></div>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span>완료 건수</span><b style={{color:"#6fcf97"}}>{tdDone.length} / {tdOrders.length}건</b></div>
+          </div>
+
+          {/* 오늘 인원 입력 */}
+          <div style={{background:tdAvail?"rgba(255,255,255,.04)":"rgba(224,80,80,.12)",border:"1px solid "+(tdAvail?"#7a8a7033":"#e0505066"),borderRadius:8,padding:"8px 10px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+              <span style={{fontSize:12,fontWeight:700,color:tdAvail?"#c8ddb8":"#f0a0a0"}}>👥 오늘 인원{!tdAvail&&" ⚠️"}</span>
+              {tdAvail&&!todayEditing&&<button onClick={()=>{setTodayDraft({workers:todayNote.workers??"",hours:todayNote.hours??8,overtime:todayNote.overtime??0});setTodayEditing(true);}} style={{background:"rgba(200,130,26,.2)",border:"1px solid #c8821a44",borderRadius:5,color:"#c8a06a",padding:"1px 7px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>✏️ 수정</button>}
+            </div>
+            {tdAvail&&!todayEditing?(
+              <div style={{fontSize:12,color:"#e8f0e0"}}>{todayNote.workers}명 × {todayNote.hours}h{Number(todayNote.overtime)>0&&<span style={{color:"#f5c97a"}}> + 연장 {todayNote.overtime}h</span>}</div>
+            ):(
+              <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                {[["작업자(명)","workers"],["근무(h/일)","hours"],["연장(h)","overtime"]].map(([l,k])=>(
+                  <div key={k} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6}}>
+                    <span style={{fontSize:11,color:"#a8b8a0"}}>{l}</span>
+                    <input type="number" min={0} value={String(todayDraft[k])} onFocus={()=>setTodayEditing(true)} onChange={e=>setTodayDraft(d=>({...d,[k]:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&saveTodayNote()}
+                      style={{width:70,background:"rgba(255,255,255,.1)",border:"1px solid #7a8a7055",borderRadius:5,color:"#f0e6d3",padding:"3px 6px",fontSize:12,outline:"none",fontFamily:"inherit",textAlign:"right"}}/>
+                  </div>
+                ))}
+                <div style={{display:"flex",gap:5,marginTop:2}}>
+                  {tdAvail&&<button onClick={()=>setTodayEditing(false)} style={{flex:1,background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7055",borderRadius:6,color:"#c8c8b8",padding:"4px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>취소</button>}
+                  <button onClick={saveTodayNote} disabled={todaySaving} style={{flex:2,background:"linear-gradient(135deg,#5a7a4a,#7a9a6a)",border:"none",borderRadius:6,color:"#fff",padding:"4px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:todaySaving?.6:1}}>{todaySaving?"저장 중...":"💾 저장"}</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {tdNoSpeed.length>0&&<div style={{marginTop:8,fontSize:11,color:"#e89090",lineHeight:1.5}}>⚠️ 생산속도 미설정 {tdNoSpeed.length}개 제품은 0시간으로 계산돼요. (제품마스터에서 설정)</div>}
+          <div style={{marginTop:8,fontSize:10,color:"#6a7a68",lineHeight:1.5}}>가동률 = 생산수량×생산속도 ÷ (작업자×근무시간+연장)<br/>분석 탭과 같은 기록을 사용해요.</div>
+        </div>
+      )}
+
       {/* ════ 완제품생산 전용: 좌측 여백에 낱개재고 사이드바 (본문 폭은 그대로 유지) ════ */}
-      {tab==="완제품생산"&&(
+      {tab==="완제품생산"&&!sideStockOpen&&(
+        <button onClick={toggleSideStock} title="낱개 재고 펼치기"
+          style={{position:"fixed",left:"max(14px, calc(50% - 886px))",top:96,zIndex:5,background:"rgba(46,46,44,.95)",border:"1px solid #7a8a7066",borderRadius:12,padding:"12px 8px",cursor:"pointer",fontFamily:"inherit",color:"#c8ddb8",fontSize:13,fontWeight:700,display:"flex",flexDirection:"column",alignItems:"center",gap:6,boxShadow:"0 4px 14px rgba(0,0,0,.35)"}}>
+          <span>🧩</span>
+          <span style={{writingMode:"vertical-rl",letterSpacing:2}}>낱개 재고</span>
+          <span style={{color:"#f5c97a",fontSize:14}}>▶</span>
+        </button>
+      )}
+      {tab==="완제품생산"&&sideStockOpen&&(
         <div style={{position:"fixed",left:"max(14px, calc(50% - 886px))",top:96,width:220,maxHeight:"calc(100vh - 116px)",overflowY:"auto",background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"14px 12px",zIndex:5}}>
-          <div style={{fontSize:13,fontWeight:700,color:"#c8ddb8",marginBottom:10}}>🧩 낱개 재고 <span style={{fontSize:11,color:"#8a9a88",fontWeight:400}}>(적은순)</span></div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,gap:6}}>
+            <div style={{fontSize:13,fontWeight:700,color:"#c8ddb8"}}>🧩 낱개 재고 <span style={{fontSize:11,color:"#8a9a88",fontWeight:400}}>(적은순)</span></div>
+            <button onClick={toggleSideStock} title="접기"
+              style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7055",borderRadius:6,color:"#f5c97a",padding:"2px 8px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700,flexShrink:0}}>◀ 접기</button>
+          </div>
           <div style={{display:"flex",flexDirection:"column",gap:6}}>
             {sidebarStockList.map(row=>(
               <div key={row.sCode+"_"+row.expiry} style={{background:"rgba(255,255,255,.05)",border:"1px solid #7a8a7033",borderRadius:8,padding:"6px 9px"}}>
@@ -2622,21 +2851,14 @@ function App(){
                   </select>
                 </div>
                 {orderForm.channelId&&(()=>{const ch=channels.find(c=>String(c.id)===String(orderForm.channelId));return ch?<div style={{alignSelf:"flex-end",paddingBottom:2}}><ChannelBadge name={ch.name} color={ch.color} color2={ch.color2} size="sm"/></div>:null;})()}
-                <LblInp label="생산수량" type="number" value={orderForm.qty} onChange={v=>setOrderForm(f=>({...f,qty:v}))} placeholder="0" width={90}/>
-                {/* 라인 선택 */}
-                <div style={{alignSelf:"flex-end"}}>
-                  <div style={{fontSize:12,color:"#c8a06a",marginBottom:4}}>생산 라인</div>
-                  <div style={{display:"flex",gap:6}}>
-                    {["A","B"].map(l=>(
-                      <button key={l} onClick={()=>setOrderForm(f=>({...f,line:l}))}
-                        style={{padding:"6px 16px",borderRadius:8,border:"2px solid "+(orderForm.line===l?(l==="A"?"#6a9a5a":"#5a8fc0"):"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,
-                          background:orderForm.line===l?(l==="A"?"rgba(60,120,60,.35)":"rgba(50,100,180,.35)"):"rgba(255,255,255,.06)",
-                          color:orderForm.line===l?(l==="A"?"#8ecf90":"#8ac8f0"):"#8a9a88"}}>
-                        {l==="A"?"🟢 A라인":"🔵 B라인"}
-                      </button>
-                    ))}
+                {isBulkCh(channels.find(c=>String(c.id)===String(orderForm.channelId))?.name)&&(
+                  <div>
+                    <div style={{...lbl,color:"#f2c94c"}}>🏢 납품 업체명 *</div>
+                    <input type="text" value={orderForm.bulkVendor||""} onChange={e=>setOrderForm(f=>({...f,bulkVendor:e.target.value}))} placeholder="예) ○○상사" autoFocus
+                      style={{...inp,width:150,border:"1px solid #f2c94c88",background:"rgba(242,201,76,.1)"}}/>
                   </div>
-                </div>
+                )}
+                <LblInp label="생산수량" type="number" value={orderForm.qty} onChange={v=>setOrderForm(f=>({...f,qty:v}))} placeholder="0" width={90}/>
                 <button onClick={addOrder} style={{...primaryBtn,alignSelf:"flex-end"}}>주문 등록</button>
               </div>
             </div>
@@ -2665,23 +2887,19 @@ function App(){
               })()}
             </div>
 
-            {/* 완료 탭 — 라인 필터 (전체/A라인/B라인) */}
+            {/* 완료 탭 — 필터 (전체 / ERP 미입력) */}
             {orderTab==="완료"&&(()=>{
               const doneAll=viewOrders.filter(o=>o.status==="완료");
-              const doneA=doneAll.filter(o=>(o.line||"A")==="A");
-              const doneB=doneAll.filter(o=>o.line==="B");
               return(
                 <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
-                  <span style={{color:"#a8b8a0",fontSize:13,fontWeight:700}}>라인 필터:</span>
+                  <span style={{color:"#a8b8a0",fontSize:13,fontWeight:700}}>필터:</span>
                   {[
                     ["전체",doneAll.length,"#6fcf97"],
-                    ["A",doneA.length,"#8ecf90"],
-                    ["B",doneB.length,"#8ac8f0"],
                     ["미입력",doneAll.filter(o=>!o.erp_done).length,"#f0b070"],
                   ].map(([l,cnt,color])=>(
                     <button key={l} onClick={()=>setDoneLineFilter(l)}
                       style={{background:doneLineFilter===l?color+"33":"rgba(255,255,255,.06)",border:"1px solid "+(doneLineFilter===l?color+"88":"#7a8a7044"),borderRadius:20,color:doneLineFilter===l?color:"#c8c8b8",padding:"5px 16px",fontSize:13,fontWeight:doneLineFilter===l?700:400,cursor:"pointer",fontFamily:"inherit"}}>
-                      {l==="전체"?"⚪ 전체":l==="A"?"🟢 A라인":l==="B"?"🔵 B라인":"⚠ ERP 미입력"} <span style={{marginLeft:4,opacity:.8}}>{cnt}건</span>
+                      {l==="전체"?"⚪ 전체":"⚠ ERP 미입력"} <span style={{marginLeft:4,opacity:.8}}>{cnt}건</span>
                     </button>
                   ))}
                 </div>
@@ -2932,65 +3150,34 @@ function App(){
                 ))
             )}
 
-            {/* 생산확정 목록 — A/B 라인별 순위 + 클릭/드래그 재정렬 */}
+            {/* 생산확정 목록 — 순위 + 클릭/드래그 재정렬 */}
             {orderTab==="생산확정"&&(
               viewOrders.filter(o=>o.status==="확정").length===0
                 ?<div style={{textAlign:"center",color:"#909888",padding:26,fontSize:14}}>생산확정 주문이 없습니다.</div>
                 :<div>
                   <div style={{fontSize:12,color:"#8a9a88",marginBottom:10,padding:"6px 12px",background:"rgba(255,255,255,.04)",borderRadius:8,border:"1px solid #7a8a7033"}}>
-                    ☰ 드래그 또는 <b style={{color:"#c8a06a"}}>순위 뱃지 클릭</b>으로 순위 변경 · <b style={{color:"#8ac8f0"}}>"⇄ 라인 전환" 버튼</b>으로 A/B 라인 이동
+                    ☰ 드래그 또는 <b style={{color:"#c8a06a"}}>순위 뱃지 클릭</b>으로 순위 변경
                   </div>
                   {(()=>{
                     const confirmedList=viewOrders.filter(o=>o.status==="확정");
-                    // 라인별 순서 계산
-                    const lineARanks={};const lineBRanks={};
-                    let ai=1,bi=1;
-                    confirmedList.forEach(o=>{
-                      if((o.line||"A")==="A")lineARanks[o.id]=ai++;
-                      else lineBRanks[o.id]=bi++;
-                    });
-                    const lineAList=confirmedList.filter(o=>(o.line||"A")==="A");
-                    const lineBList=confirmedList.filter(o=>o.line==="B");
-
-                    const handleLineSwitch=async(order,e)=>{
-                      e.stopPropagation();
-                      const myLine=order.line||"A";
-                      const newLine=myLine==="A"?"B":"A";
-                      if(!window.confirm(`${myLine}라인 → ${newLine}라인으로 이동하시겠습니까?`))return;
-                      setOrders(prev=>prev.map(o=>o.id===order.id?{...o,line:newLine}:o));
-                      const{error}=await sb.from("drip2_orders").update({line:newLine}).eq("id",order.id);
-                      if(error){
-                        alert("라인 전환 저장 실패: "+error.message);
-                        setOrders(prev=>prev.map(o=>o.id===order.id?{...o,line:myLine}:o));
-                      }
-                    };
-
-                    const handleRankClick=(order)=>{
-                      const myLine=order.line||"A";
-                      const sameLineList=myLine==="A"?lineAList:lineBList;
-                      const myRank=myLine==="A"?lineARanks[order.id]:lineBRanks[order.id];
-                      const total=sameLineList.length;
-                      const input=window.prompt(`현재 ${myLine}-${myRank} 입니다.\n${myLine}라인에서 이동할 순위를 입력하세요 (1~${total}):`);
+                    const handleRankClick=(order,myRank)=>{
+                      const total=confirmedList.length;
+                      const input=window.prompt(`현재 ${myRank}순위 입니다.\n이동할 순위를 입력하세요 (1~${total}):`);
                       if(!input)return;
                       const target=parseInt(input);
                       if(isNaN(target)||target<1||target>total){alert(`1~${total} 사이 숫자를 입력하세요.`);return;}
                       if(target===myRank)return;
-                      // 같은 라인 내 재정렬
-                      const reordered=[...sameLineList];
+                      const reordered=[...confirmedList];
                       const[moved]=reordered.splice(myRank-1,1);
                       reordered.splice(target-1,0,moved);
-                      const sortedPriorities=sameLineList.map(o=>o.priority).sort((a,b)=>a-b);
+                      const sortedPriorities=confirmedList.map(o=>o.priority).sort((a,b)=>a-b);
                       const updates=reordered.map((o,i)=>({id:o.id,priority:sortedPriorities[i]}));
                       setOrders(prev=>prev.map(o=>{const u=updates.find(x=>x.id===o.id);return u?{...o,priority:u.priority}:o;}));
                       Promise.all(updates.map(u=>sb.from("drip2_orders").update({priority:u.priority}).eq("id",u.id)));
                     };
 
                     return confirmedList.map((order,idx)=>{
-                      const myLine=order.line||"A";
-                      const myRank=myLine==="A"?lineARanks[order.id]:lineBRanks[order.id];
-                      const isA=myLine==="A";
-                      const badgeBg=isA?"linear-gradient(135deg,#2a5a2a,#4a8a4a)":"linear-gradient(135deg,#1a3a6a,#2a5a9a)";
-                      const badgeGlow=isA?"rgba(0,200,80,.5)":"rgba(68,170,255,.5)";
+                      const myRank=idx+1;
                       const isDragTarget=dragOverId===order.id;
                       return(
                         <div key={order.id}
@@ -3002,22 +3189,15 @@ function App(){
                           style={{marginBottom:8,transition:"opacity .15s",opacity:dragItem.current===order.id?.4:1}}>
                           {isDragTarget&&<div style={{height:3,background:"#c8821a",borderRadius:2,marginBottom:4,boxShadow:"0 0 8px #c8821a"}}/>}
                           <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
-                            {/* A/B 라인 순위 뱃지 */}
+                            {/* 순위 뱃지 */}
                             <div style={{flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",gap:4,paddingTop:12}}>
                               <div
-                                onClick={()=>handleRankClick(order)}
-                                title={`클릭해서 ${myLine}라인 순위 변경`}
-                                style={{background:badgeBg,color:"#fff",borderRadius:7,minWidth:44,height:38,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:13,cursor:"pointer",userSelect:"none",boxShadow:`0 2px 6px rgba(0,0,0,.3)`,padding:"0 6px",gap:1,flexDirection:"column",lineHeight:1}}>
-                                <span style={{fontSize:10,opacity:.85,letterSpacing:.5}}>{myLine}라인</span>
-                                <span style={{fontSize:18,lineHeight:1}}>{myRank}</span>
+                                onClick={()=>handleRankClick(order,myRank)}
+                                title="클릭해서 순위 변경"
+                                style={{background:"linear-gradient(135deg,#7a6020,#b08a30)",color:"#fff",borderRadius:7,minWidth:44,height:38,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:18,cursor:"pointer",userSelect:"none",boxShadow:"0 2px 6px rgba(0,0,0,.3)",padding:"0 6px"}}>
+                                {myRank}
                               </div>
                               <div style={{fontSize:9,color:"#7a8a70",letterSpacing:.5}}>순위</div>
-                              <button
-                                onClick={e=>handleLineSwitch(order,e)}
-                                title={`클릭해서 ${myLine==="A"?"B":"A"}라인으로 이동`}
-                                style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7055",borderRadius:6,color:"#c8ddb8",fontSize:11,fontWeight:700,padding:"5px 8px",cursor:"pointer",fontFamily:"inherit",minWidth:44,whiteSpace:"nowrap"}}>
-                                ⇄ {myLine==="A"?"B":"A"}로
-                              </button>
                               <div style={{color:"#5a6a50",fontSize:16,cursor:"grab",lineHeight:1}}>⠿</div>
                             </div>
                             {/* 체크박스 */}
@@ -3043,7 +3223,7 @@ function App(){
 
             {/* 완료 목록 */}
             {orderTab==="완료"&&(()=>{
-              const doneFiltered=viewOrders.filter(o=>o.status==="완료").filter(o=>doneLineFilter==="전체"?true:doneLineFilter==="미입력"?!o.erp_done:(doneLineFilter==="A"?(o.line||"A")==="A":o.line==="B"));
+              const doneFiltered=viewOrders.filter(o=>o.status==="완료").filter(o=>doneLineFilter==="미입력"?!o.erp_done:true);
               return doneFiltered.length===0
                 ?<div style={{textAlign:"center",color:"#909888",padding:26,fontSize:14}}>완료 주문이 없습니다.</div>
                 :doneFiltered.map((order,idx,arr)=>(
@@ -3536,144 +3716,170 @@ function App(){
           </div>
         )}
 
-        {/* ════ 라인별생산량 ════ */}
-        {tab==="라인별생산량"&&(
+        {/* ════ 분석2 — 요일별 생산량 / 업체별 낱개 ════ */}
+        {tab==="분석2"&&(
           <div>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-              <SecTitle icon="🟢🔵" title="라인별 생산량 / 낱개 포장량"/>
+              <SecTitle icon="📊" title="분석2 — 요일별 생산량 · 업체별 낱개"/>
+              <button onClick={exportAnalysis2Excel} style={{background:"#1a4020",border:"1px solid #4caf5055",borderRadius:6,color:"#6fcf97",padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>⬇ 엑셀 다운로드</button>
             </div>
 
-            {/* 기간 선택 */}
-            <div style={{background:"rgba(255,255,255,.05)",border:"1px solid #7a8a7044",borderRadius:10,padding:"12px 16px",marginBottom:16,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-              {["일별","월별","년별","특정기간"].map(pt=>(
-                <button key={pt} onClick={()=>setAnaPeriodType(pt)} style={{padding:"5px 14px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,background:anaPeriodType===pt?"#6a8a5a":"rgba(255,255,255,.1)",color:anaPeriodType===pt?"#fff":"#c8c8b8",fontWeight:anaPeriodType===pt?700:400}}>{pt}</button>
-              ))}
-              {anaPeriodType!=="특정기간"&&(
-                <div style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.06)",border:"1px solid #7a8a7044",borderRadius:20,padding:"3px 6px"}}>
-                  <button onClick={()=>shiftAnaAnchor(-1)} style={{background:"rgba(255,255,255,.1)",border:"none",borderRadius:"50%",width:26,height:26,color:"#f5c97a",cursor:"pointer",fontFamily:"inherit",fontSize:14}}>◀</button>
-                  <span style={{color:"#f5c97a",fontWeight:700,fontSize:14,minWidth:90,textAlign:"center"}}>{anaPeriodLabel}</span>
-                  <button onClick={()=>shiftAnaAnchor(1)} style={{background:"rgba(255,255,255,.1)",border:"none",borderRadius:"50%",width:26,height:26,color:"#f5c97a",cursor:"pointer",fontFamily:"inherit",fontSize:14}}>▶</button>
-                  {anaAnchor!==today()&&<button onClick={()=>setAnaAnchor(today())} style={{background:"rgba(200,130,26,.2)",border:"1px solid #c8821a44",borderRadius:14,color:"#c8a06a",padding:"3px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",marginLeft:4}}>오늘</button>}
+            {/* 기간 선택 — 원하는 기간 직접 지정 */}
+            {(()=>{
+              const t=today(),y=t.slice(0,4),m=t.slice(0,7);
+              const lastMonthEnd=addDays(m+"-01",-1),lastMonthStart=lastMonthEnd.slice(0,7)+"-01";
+              const presets=[
+                ["최근 1주",addDays(t,-6),t],["최근 1개월",addDays(t,-30),t],["최근 3개월",addDays(t,-90),t],["최근 6개월",addDays(t,-182),t],
+                ["이번 달",m+"-01",t],["지난 달",lastMonthStart,lastMonthEnd],["올해",y+"-01-01",t],
+              ];
+              const days=daysBetween(a2Range.from,a2Range.to);
+              const dirty=a2Draft.from!==a2Range.from||a2Draft.to!==a2Range.to;
+              return(
+                <div style={{background:"rgba(255,255,255,.05)",border:"1px solid #7a8a7044",borderRadius:10,padding:"12px 16px",marginBottom:12}}>
+                  <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                    <span style={{color:"#c8ddb8",fontWeight:700,fontSize:13}}>📅 조회 기간</span>
+                    <input type="date" value={a2Draft.from} max={a2Draft.to||undefined} onChange={e=>setA2Draft(d=>({...d,from:e.target.value}))} style={{...inp,width:150}}/>
+                    <span style={{color:"#8a9a88"}}>~</span>
+                    <input type="date" value={a2Draft.to} min={a2Draft.from||undefined} onChange={e=>setA2Draft(d=>({...d,to:e.target.value}))} style={{...inp,width:150}}/>
+                    <button onClick={()=>applyA2Range(a2Draft.from,a2Draft.to)} style={{...primaryBtn,padding:"6px 16px",fontSize:13,opacity:dirty?1:.6}}>🔍 조회</button>
+                    <span style={{fontSize:12,color:"#8a9a88",marginLeft:"auto"}}>
+                      {a2Loading?"불러오는 중...":a2Range.from+" ~ "+a2Range.to+" ("+days+"일) · 생산완료 "+a2Rows.length.toLocaleString()+"건"}
+                    </span>
+                  </div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>
+                    {presets.map(([l,f,tt])=>{const on=a2Range.from===f&&a2Range.to===tt;return(
+                      <button key={l} onClick={()=>applyA2Range(f,tt)} style={{padding:"4px 12px",borderRadius:20,border:"1px solid "+(on?"#6a8a5a":"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:on?"#6a8a5a":"rgba(255,255,255,.06)",color:on?"#fff":"#c8c8b8",fontWeight:on?700:400}}>{l}</button>
+                    );})}
+                  </div>
                 </div>
-              )}
-              {anaPeriodType==="특정기간"&&(<>
-                <input type="date" value={anaCustomFrom} onChange={e=>setAnaCustomFrom(e.target.value)} style={{...inp,width:150}}/>
-                <span style={{color:"#8a9a88"}}>~</span>
-                <input type="date" value={anaCustomTo} onChange={e=>setAnaCustomTo(e.target.value)} style={{...inp,width:150}}/>
-              </>)}
-              <span style={{fontSize:12,color:"#8a9a88",marginLeft:"auto"}}>
-                {anaLoading?"불러오는 중...":anaFrom+" ~ "+anaTo+" · "+anaRows.length.toLocaleString()+"건"}
-              </span>
+              );
+            })()}
+
+            {/* 보기 옵션 */}
+            <div style={{display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:18,fontSize:13}}>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <span style={{color:"#a8b8a0",fontWeight:700}}>기준</span>
+                {[["unit","📦 낱개"],["qty","🎁 완제품"]].map(([k,l])=>(
+                  <button key={k} onClick={()=>setA2Metric(k)} style={{padding:"4px 12px",borderRadius:20,border:"1px solid "+(a2Metric===k?"#4db6ac":"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:a2Metric===k?"rgba(77,182,172,.2)":"rgba(255,255,255,.06)",color:a2Metric===k?"#4db6ac":"#c8c8b8",fontWeight:a2Metric===k?700:400}}>{l}</button>
+                ))}
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <span style={{color:"#a8b8a0",fontWeight:700}}>요일 값</span>
+                {[["avg","생산일 평균"],["sum","합계"]].map(([k,l])=>(
+                  <button key={k} onClick={()=>setA2Mode(k)} style={{padding:"4px 12px",borderRadius:20,border:"1px solid "+(a2Mode===k?"#f5c97a":"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:a2Mode===k?"rgba(245,201,122,.15)":"rgba(255,255,255,.06)",color:a2Mode===k?"#f5c97a":"#c8c8b8",fontWeight:a2Mode===k?700:400}}>{l}</button>
+                ))}
+              </div>
+              <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",color:"#c8c8b8"}}>
+                <input type="checkbox" checked={a2SplitBulk} onChange={e=>setA2SplitBulk(e.target.checked)} style={{accentColor:"#f2c94c",width:15,height:15}}/>
+                대량납품을 납품업체별로 나눠 보기
+              </label>
             </div>
 
-            {/* 생산량 / 낱개포장량 서브탭 */}
-            <div style={{display:"flex",gap:0,marginBottom:20,borderBottom:"2px solid #6a8a5a33"}}>
-              {["생산량","낱개포장량"].map(t=>(
-                <button key={t} onClick={()=>setLineAnaSubTab(t)}
-                  style={{background:"none",border:"none",padding:"8px 22px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
-                    color:lineAnaSubTab===t?"#d8ecca":"#8a9a88",
-                    borderBottom:lineAnaSubTab===t?"2px solid #6fcf97":"2px solid transparent",marginBottom:-2}}>
-                  {t==="생산량"?"📈 생산량":"📦 낱개포장량"}
-                </button>
-              ))}
+            {/* KPI */}
+            <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:24}}>
+              <KpiCard icon="📦" label="총 낱개 생산" value={a2TotalUnit.toLocaleString()+"개"} color="#4db6ac"/>
+              <KpiCard icon="🎁" label="총 완제품 생산" value={a2TotalQty.toLocaleString()+"개"}/>
+              <KpiCard icon="📅" label="생산일수 / 일평균 낱개" value={a2ProdDays+"일"} sub={"하루 평균 낱개 "+(a2ProdDays?a2Fmt(a2TotalUnit/a2ProdDays):0)+"개"}/>
+              <KpiCard icon="🏆" label="가장 많이 만드는 요일" value={a2BestWd!=null?WEEKDAY_KR[a2BestWd]+"요일":"-"} sub={a2BestWd!=null?("생산일 평균 "+a2Fmt(a2Pick(a2Wd[a2BestWd])/a2Wd[a2BestWd].days.size)+a2Unit):""} color="#6fcf97"/>
             </div>
 
-            {/* ── 생산량 ── */}
-            {lineAnaSubTab==="생산량"&&(<>
-              <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:12}}>
-                <KpiCard icon="🟢" label="A라인 생산량" value={anaLineQtyATotal.toLocaleString()+"개"} sub={anaLineQtyAPct.toFixed(1)+"%"}/>
-                <KpiCard icon="🔵" label="B라인 생산량" value={anaLineQtyBTotal.toLocaleString()+"개"} sub={anaLineQtyBPct.toFixed(1)+"%"}/>
-                <KpiCard icon="⚪" label="합계 생산량" value={anaLineQtySum.toLocaleString()+"개"}/>
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:24,fontSize:12}}>
-                <div style={{flex:1,display:"flex",height:22,borderRadius:6,overflow:"hidden",border:"1px solid #7a8a7044"}}>
-                  <div style={{width:anaLineQtyAPct+"%",background:"#6a9a5a",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:11,fontWeight:700}}>{anaLineQtyAPct>=8?anaLineQtyAPct.toFixed(1)+"%":""}</div>
-                  <div style={{width:anaLineQtyBPct+"%",background:"#5a8fc0",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:11,fontWeight:700}}>{anaLineQtyBPct>=8?anaLineQtyBPct.toFixed(1)+"%":""}</div>
-                </div>
-                <span style={{color:"#8ecf90",fontWeight:700,minWidth:88}}>🟢 A {anaLineQtyAPct.toFixed(1)}%</span>
-                <span style={{color:"#8ac8f0",fontWeight:700,minWidth:88}}>🔵 B {anaLineQtyBPct.toFixed(1)}%</span>
-              </div>
+            {/* ① 요일별 생산량 */}
+            <div style={{marginBottom:28}}>
+              <SecTitle icon="📅" title={"요일별 생산량 ("+(a2Mode==="avg"?"생산일 평균":"합계")+" · "+(a2Metric==="unit"?"낱개":"완제품")+")"}/>
+              <StackedBarChart data={a2WdChart} unit="개" height={220}/>
+              <Tbl headers={["요일","생산일수","완제품 합계","완제품 일평균","낱개 합계","낱개 일평균","낱개 비중"]}>
+                {a2WdShow.map(w=>{const W=a2Wd[w],n=W.days.size,share=a2TotalUnit?W.unit/a2TotalUnit*100:0;return(
+                  <tr key={w}>
+                    <Td style={{color:w===0?"#e89090":w===6?"#8ac8f0":"#f5c97a",fontWeight:700}}>{WEEKDAY_KR[w]}요일</Td>
+                    <Td>{n}일</Td>
+                    <Td>{W.qty.toLocaleString()}개</Td>
+                    <Td>{n?a2Fmt(W.qty/n):0}개</Td>
+                    <Td>{W.unit.toLocaleString()}개</Td>
+                    <Td style={{color:"#4db6ac",fontWeight:700}}>{n?a2Fmt(W.unit/n):0}개</Td>
+                    <Td><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:80,height:6,background:"rgba(255,255,255,.08)",borderRadius:3,overflow:"hidden"}}><div style={{width:Math.min(share,100)+"%",height:"100%",background:"#4db6ac"}}/></div><span>{share.toFixed(1)}%</span></div></Td>
+                  </tr>);})}
+                <tr style={{background:"rgba(245,201,122,.06)"}}>
+                  <Td style={{fontWeight:700,color:"#f5c97a"}}>합계</Td>
+                  <Td style={{fontWeight:700}}>{a2ProdDays}일</Td>
+                  <Td style={{fontWeight:700}}>{a2TotalQty.toLocaleString()}개</Td>
+                  <Td>{a2ProdDays?a2Fmt(a2TotalQty/a2ProdDays):0}개</Td>
+                  <Td style={{fontWeight:700}}>{a2TotalUnit.toLocaleString()}개</Td>
+                  <Td>{a2ProdDays?a2Fmt(a2TotalUnit/a2ProdDays):0}개</Td>
+                  <Td>100%</Td>
+                </tr>
+              </Tbl>
+              <div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>※ 생산일 평균 = 그 요일 합계 ÷ 실제로 생산한 그 요일 날짜 수 (요일마다 횟수가 달라서 평균으로 비교하는 게 정확해요)</div>
+            </div>
 
-              <div style={{marginBottom:26}}>
-                <SecTitle icon="📈" title="라인별 생산량 추이 (A/B/합계)"/>
-                <MultiTrendSvgChart data={anaLineQtyTrend} series={anaLineSeries} unit="개" height={190}/>
-                <div style={{display:"flex",gap:20,marginTop:8,fontSize:13,color:"#a8b8a0",flexWrap:"wrap"}}>
-                  <span>🟢 A라인 총 <b style={{color:"#8ecf90"}}>{anaLineQtyATotal.toLocaleString()}개</b></span>
-                  <span>🔵 B라인 총 <b style={{color:"#8ac8f0"}}>{anaLineQtyBTotal.toLocaleString()}개</b></span>
-                  <span>⚪ 합계 <b style={{color:"#f5c97a"}}>{(anaLineQtyATotal+anaLineQtyBTotal).toLocaleString()}개</b></span>
-                </div>
-              </div>
-
-              <div style={{marginBottom:10}}>
-                <SecTitle icon="📋" title="일자별 생산량 상세"/>
-                <Tbl headers={["날짜","요일","A 생산량","B 생산량","합계 생산량"]}>
-                  {[...anaLineDayKeys].reverse().map(d=>{
-                    const v=anaLineDayMap[d];
-                    const t=v.qA+v.qB;
-                    const aPct=t>0?(v.qA/t*100):0,bPct=t>0?(v.qB/t*100):0;
-                    return(
-                      <tr key={d}>
-                        <Td style={{color:"#f5c97a",fontWeight:600}}>{d}</Td>
-                        <Td>{WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()]}</Td>
-                        <Td style={{color:"#8ecf90"}}>{v.qA.toLocaleString()}개 {t>0&&<span style={{color:"#8a9a88",fontSize:12}}>({aPct.toFixed(1)}%)</span>}</Td>
-                        <Td style={{color:"#8ac8f0"}}>{v.qB.toLocaleString()}개 {t>0&&<span style={{color:"#8a9a88",fontSize:12}}>({bPct.toFixed(1)}%)</span>}</Td>
-                        <Td style={{fontWeight:700}}>{(v.qA+v.qB).toLocaleString()}개</Td>
+            {/* ② 업체별 × 요일별 */}
+            <div style={{marginBottom:28}}>
+              <SecTitle icon="🏢" title={"업체별 요일 생산량 ("+(a2Mode==="avg"?"생산일 평균":"합계")+" · "+(a2Metric==="unit"?"낱개":"완제품")+")"}/>
+              <ChartLegend items={a2ChKeys.map(k=>({label:k,color:a2ChColor[k]}))}/>
+              <StackedBarChart data={a2WdChChart} unit="개" height={260}/>
+              <div style={{overflowX:"auto",marginTop:6}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+                  <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
+                    <th style={{padding:"8px 12px",textAlign:"left",color:"#c8ddb8"}}>업체</th>
+                    {a2WdShow.map(w=><th key={w} style={{padding:"8px 10px",textAlign:"right",color:w===0?"#e89090":w===6?"#8ac8f0":"#c8ddb8"}}>{WEEKDAY_KR[w]}</th>)}
+                    <th style={{padding:"8px 12px",textAlign:"right",color:"#f5c97a"}}>기간 합계</th>
+                    <th style={{padding:"8px 12px",textAlign:"right",color:"#c8ddb8"}}>비율</th>
+                  </tr></thead>
+                  <tbody>
+                    {a2ChKeys.map(k=>{const C=a2Ch[k];const tot=a2Pick(C);return(
+                      <tr key={k}>
+                        <td style={{padding:"7px 12px",borderBottom:"1px solid #6a6a6444",whiteSpace:"nowrap"}}><span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:a2ChColor[k],marginRight:6}}/>{k}</td>
+                        {a2WdShow.map(w=>{const v=a2WdVal(w,C.wd[w]);return(
+                          <td key={w} style={{padding:"7px 10px",borderBottom:"1px solid #6a6a6444",textAlign:"right",fontVariantNumeric:"tabular-nums",background:v?"rgba(77,182,172,"+(0.08+v/a2HeatMax*0.5).toFixed(2)+")":"transparent",color:v?"#e8f0e0":"#5a6a58"}}>{v?a2Fmt(v):"-"}</td>);})}
+                        <td style={{padding:"7px 12px",borderBottom:"1px solid #6a6a6444",textAlign:"right",fontWeight:700,color:"#f5c97a"}}>{tot.toLocaleString()}</td>
+                        <td style={{padding:"7px 12px",borderBottom:"1px solid #6a6a6444",textAlign:"right"}}>{a2TotalPick?(tot/a2TotalPick*100).toFixed(1):0}%</td>
+                      </tr>);})}
+                    {a2ChKeys.length>0&&(
+                      <tr style={{background:"rgba(245,201,122,.1)",borderTop:"2px solid #c8821a66"}}>
+                        <td style={{padding:"8px 12px",fontWeight:800,color:"#f5c97a",whiteSpace:"nowrap"}}>총 수량</td>
+                        {a2WdShow.map(w=>{const v=a2WdVal(w,a2Wd[w]);return(
+                          <td key={w} style={{padding:"8px 10px",textAlign:"right",fontWeight:800,fontVariantNumeric:"tabular-nums",color:v?"#f5c97a":"#5a6a58"}}>{v?a2Fmt(v):"-"}</td>);})}
+                        <td style={{padding:"8px 12px",textAlign:"right",fontWeight:800,color:"#f5c97a"}}>{a2TotalPick.toLocaleString()}</td>
+                        <td style={{padding:"8px 12px",textAlign:"right",fontWeight:700}}>100%</td>
                       </tr>
-                    );
-                  })}
-                  {anaLineDayKeys.length===0&&<tr><Td colSpan={7} style={{textAlign:"center",color:"#8a9a88"}}>데이터가 없습니다.</Td></tr>}
+                    )}
+                    {a2ChKeys.length===0&&<tr><td colSpan={a2WdShow.length+3} style={{padding:16,textAlign:"center",color:"#8a9a88"}}>데이터가 없습니다.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>※ 진한 칸일수록 많이 만든 요일이에요. 단위: {a2Unit} · {a2Mode==="avg"?"요일 칸은 생산일 평균":"요일 칸은 기간 합계"}</div>
+            </div>
+
+            {/* ③ 업체별 낱개 생산 현황 */}
+            <div style={{marginBottom:28}}>
+              <SecTitle icon="📦" title="업체별 낱개 생산 현황"/>
+              <BarRankChart unit="개" data={[...a2ChKeys].sort((a,b)=>a2Ch[b].unit-a2Ch[a].unit).map(k=>({label:k,value:a2Ch[k].unit,color:a2ChColor[k]}))}/>
+              <div style={{marginTop:12}}>
+                <Tbl headers={["순위","업체","낱개 합계","낱개 비율","완제품 합계","생산일수","생산일 평균 낱개","많이 만드는 요일"]}>
+                  {[...a2ChKeys].sort((a,b)=>a2Ch[b].unit-a2Ch[a].unit).map((k,i)=>{const C=a2Ch[k];
+                    const topW=Object.keys(C.wd).map(Number).sort((a,b)=>C.wd[b].unit-C.wd[a].unit)[0];
+                    return(
+                    <tr key={k}>
+                      <Td>{i+1}</Td>
+                      <Td><span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:a2ChColor[k],marginRight:6}}/>{k}</Td>
+                      <Td style={{color:"#4db6ac",fontWeight:700}}>{C.unit.toLocaleString()}개</Td>
+                      <Td>{a2TotalUnit?(C.unit/a2TotalUnit*100).toFixed(1):0}%</Td>
+                      <Td>{C.qty.toLocaleString()}개</Td>
+                      <Td>{C.days.size}일</Td>
+                      <Td>{C.days.size?a2Fmt(C.unit/C.days.size):0}개</Td>
+                      <Td>{topW!=null?WEEKDAY_KR[topW]+"요일":"-"}</Td>
+                    </tr>);})}
+                  {a2ChKeys.length===0&&<tr><Td colSpan={8} style={{textAlign:"center",color:"#8a9a88"}}>데이터가 없습니다.</Td></tr>}
                 </Tbl>
               </div>
-            </>)}
+              {a2NoBom.length>0&&<div style={{marginTop:6,fontSize:11,color:"#e89090"}}>⚠️ BOM 미등록 제품 {a2NoBom.length}개({a2NoBom.slice(0,5).map(pName).join(", ")}{a2NoBom.length>5?" 외":""})은 낱개 0으로 계산돼요. "BOM관리" 탭에서 설정해주세요.</div>}
+            </div>
 
-            {/* ── 낱개포장량 ── */}
-            {lineAnaSubTab==="낱개포장량"&&(<>
-              <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:12}}>
-                <KpiCard icon="🟢" label="A라인 낱개포장량" value={anaLinePackATotal.toLocaleString()+"개"} sub={anaLinePackAPct.toFixed(1)+"%"}/>
-                <KpiCard icon="🔵" label="B라인 낱개포장량" value={anaLinePackBTotal.toLocaleString()+"개"} sub={anaLinePackBPct.toFixed(1)+"%"}/>
-                <KpiCard icon="⚪" label="합계 낱개포장량" value={anaLinePackSum.toLocaleString()+"개"}/>
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:24,fontSize:12}}>
-                <div style={{flex:1,display:"flex",height:22,borderRadius:6,overflow:"hidden",border:"1px solid #7a8a7044"}}>
-                  <div style={{width:anaLinePackAPct+"%",background:"#6a9a5a",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:11,fontWeight:700}}>{anaLinePackAPct>=8?anaLinePackAPct.toFixed(1)+"%":""}</div>
-                  <div style={{width:anaLinePackBPct+"%",background:"#5a8fc0",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:11,fontWeight:700}}>{anaLinePackBPct>=8?anaLinePackBPct.toFixed(1)+"%":""}</div>
-                </div>
-                <span style={{color:"#8ecf90",fontWeight:700,minWidth:88}}>🟢 A {anaLinePackAPct.toFixed(1)}%</span>
-                <span style={{color:"#8ac8f0",fontWeight:700,minWidth:88}}>🔵 B {anaLinePackBPct.toFixed(1)}%</span>
-              </div>
-
-              <div style={{marginBottom:26}}>
-                <SecTitle icon="📦" title="라인별 낱개 포장량 추이 (A/B/합계)"/>
-                <MultiTrendSvgChart data={anaLinePackTrend} series={anaLineSeries} unit="개" height={190}/>
-                <div style={{display:"flex",gap:20,marginTop:8,fontSize:13,color:"#a8b8a0",flexWrap:"wrap"}}>
-                  <span>🟢 A라인 총 <b style={{color:"#8ecf90"}}>{anaLinePackATotal.toLocaleString()}개</b></span>
-                  <span>🔵 B라인 총 <b style={{color:"#8ac8f0"}}>{anaLinePackBTotal.toLocaleString()}개</b></span>
-                  <span>⚪ 합계 <b style={{color:"#f5c97a"}}>{(anaLinePackATotal+anaLinePackBTotal).toLocaleString()}개</b></span>
-                </div>
-                {anaLinePackTrend.length===0&&<div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>💡 완제품 생산완료 수량 × BOM 구성품 총 수량으로 계산돼요.</div>}
-              </div>
-
-              <div style={{marginBottom:10}}>
-                <SecTitle icon="📋" title="일자별 낱개포장량 상세"/>
-                <Tbl headers={["날짜","요일","A 낱개포장량","B 낱개포장량","합계 낱개포장량"]}>
-                  {[...anaLineDayKeys].reverse().map(d=>{
-                    const v=anaLineDayMap[d];
-                    const t=v.pA+v.pB;
-                    const aPct=t>0?(v.pA/t*100):0,bPct=t>0?(v.pB/t*100):0;
-                    return(
-                      <tr key={d}>
-                        <Td style={{color:"#f5c97a",fontWeight:600}}>{d}</Td>
-                        <Td>{WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()]}</Td>
-                        <Td style={{color:"#8ecf90"}}>{v.pA.toLocaleString()}개 {t>0&&<span style={{color:"#8a9a88",fontSize:12}}>({aPct.toFixed(1)}%)</span>}</Td>
-                        <Td style={{color:"#8ac8f0"}}>{v.pB.toLocaleString()}개 {t>0&&<span style={{color:"#8a9a88",fontSize:12}}>({bPct.toFixed(1)}%)</span>}</Td>
-                        <Td style={{fontWeight:700}}>{(v.pA+v.pB).toLocaleString()}개</Td>
-                      </tr>
-                    );
-                  })}
-                  {anaLineDayKeys.length===0&&<tr><Td colSpan={5} style={{textAlign:"center",color:"#8a9a88"}}>데이터가 없습니다.</Td></tr>}
-                </Tbl>
-              </div>
-            </>)}
+            {/* ④ 일자별 업체 낱개 추이 */}
+            <div style={{marginBottom:10}}>
+              <SecTitle icon="📈" title={"일자별 업체 생산 추이 ("+(a2Metric==="unit"?"낱개":"완제품")+")"}/>
+              <ChartLegend items={a2ChKeys.map(k=>({label:k,color:a2ChColor[k]}))}/>
+              <StackedBarChart data={a2DateChart} unit="개" height={240}/>
+            </div>
           </div>
         )}
 
@@ -3806,36 +4012,6 @@ function App(){
         {tab==="설정"&&(
           <div>
             <SecTitle icon="⚙️" title="시스템 설정"/>
-
-            {/* 생산 라인 안내 */}
-            <div style={{background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"20px 22px",marginBottom:24}}>
-              <div style={{fontSize:15,fontWeight:700,color:"#c8ddb8",marginBottom:6}}>🏭 생산 라인 설정</div>
-              <div style={{fontSize:12,color:"#8a9a88",marginBottom:16}}>생산 주문 등록 시 A라인 / B라인을 선택합니다. 전광판에서 라인별로 구분해서 표시됩니다.</div>
-              <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
-                <div style={{flex:1,minWidth:200,background:"rgba(60,120,60,.15)",border:"2px solid #6a9a5a55",borderRadius:10,padding:"16px 20px"}}>
-                  <div style={{fontSize:18,fontWeight:900,color:"#8ecf90",marginBottom:8}}>🟢 A 라인</div>
-                  <div style={{fontSize:13,color:"#5a8a5a",lineHeight:1.7}}>
-                    <div>완제품 생산 주문 등록 시 <b style={{color:"#8ecf90"}}>A라인</b> 선택</div>
-                    <div>전광판 왼쪽 컬럼에 표시</div>
-                    <div style={{marginTop:8,fontSize:12,color:"#4a7a4a"}}>기본값: 신규 주문은 A라인으로 등록</div>
-                  </div>
-                </div>
-                <div style={{flex:1,minWidth:200,background:"rgba(50,100,180,.15)",border:"2px solid #5a8fc055",borderRadius:10,padding:"16px 20px"}}>
-                  <div style={{fontSize:18,fontWeight:900,color:"#8ac8f0",marginBottom:8}}>🔵 B 라인</div>
-                  <div style={{fontSize:13,color:"#4a6a9a",lineHeight:1.7}}>
-                    <div>완제품 생산 주문 등록 시 <b style={{color:"#8ac8f0"}}>B라인</b> 선택</div>
-                    <div>전광판 오른쪽 컬럼에 표시</div>
-                    <div style={{marginTop:8,fontSize:12,color:"#3a5a8a"}}>주문 등록 후 ✏️ 수정으로 라인 변경 가능</div>
-                  </div>
-                </div>
-              </div>
-              <div style={{marginTop:14,padding:"10px 14px",background:"rgba(200,130,26,.08)",border:"1px solid #c8821a33",borderRadius:8,fontSize:12,color:"#c8a06a",lineHeight:1.6}}>
-                ⚠️ <b>DB 설정 필요 (최초 1회)</b> — Supabase 대시보드 SQL Editor에서 아래 쿼리를 실행하세요:<br/>
-                <code style={{display:"block",marginTop:6,padding:"8px 12px",background:"rgba(0,0,0,.3)",borderRadius:6,color:"#f5c97a",fontSize:11,fontFamily:"monospace",letterSpacing:.3}}>
-                  ALTER TABLE drip2_orders ADD COLUMN IF NOT EXISTS line TEXT DEFAULT 'A';
-                </code>
-              </div>
-            </div>
 
             {/* 업체 관리 */}
             <div style={{background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"20px 22px",marginBottom:24}}>
