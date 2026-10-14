@@ -29,7 +29,7 @@ select option { background: #2e2e2c; color: #f0ede8; }
 
 // ════════════════════════════════════════════
 // ★ 앱 버전 — 배포할 때마다 이 값만 바꾸면, 켜져 있는 모든 화면(전광판 등)이 10분 안에 자동 새로고침됨
-const APP_VERSION="2026-10-13-7";
+const APP_VERSION="2026-10-14-1";
 // 대량납품 업체 판별 (출고업체명이 "대량납품"이면 실제 납품업체명을 별도 입력)
 const BULK_CH="대량납품";
 const isBulkCh=name=>(name||"").trim()===BULK_CH;
@@ -314,7 +314,8 @@ function DashboardView({orders,pMaster,sMaster,channels}){
   const confirmed=[...orders]
     .filter(o=>o.status==="확정"&&(!o.plan_date||(o.plan_date||"").slice(0,10)===todayDate))
     .sort((a,b)=>a.priority-b.priority);
-  // (A/B 라인 구분 폐지 — 확정 목록 하나로 표시)
+  const lineA=confirmed.filter(o=>(o.line||"A")==="A");
+  const lineB=confirmed.filter(o=>o.line==="B");
 
   const pName=code=>(pMaster.find(p=>p.code===code)||{}).name||code;
   const fd=d=>d?String(d).slice(0,10).replace(/-/g,""):"-";
@@ -470,12 +471,17 @@ function DashboardView({orders,pMaster,sMaster,channels}){
       </div>
     );
   };
-  // ── 생산순서 화면 (확정 목록 전체 폭) ──
+  // ── 생산순서 화면 (A만 있으면 전체화면, A+B면 분할) ──
   const ScreenOrder=()=>{
+    const hasA=lineA.length>0;
+    const hasB=lineB.length>0;
     return(
       <div style={{display:"flex",gap:14,alignItems:"flex-start"}}>
-        {confirmed.length>0?<LineColumn lineOrders={confirmed} lineLabel="📋 생산 순서" accent="green" accentDim={DB_GREEN_DIM} fullWidth={true}/>:(
-          <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,color:"#2a4a2a",minHeight:"50vh"}}>
+        {hasA&&<LineColumn lineOrders={lineA} lineLabel="🟢 A 라인" accent="green" accentDim={DB_GREEN_DIM} fullWidth={!hasB}/>}
+        {hasA&&hasB&&<div style={{width:2,background:"linear-gradient(180deg,transparent,#3a4a3a,transparent)",flexShrink:0}}/>}
+        {hasB&&<LineColumn lineOrders={lineB} lineLabel="🔵 B 라인" accent="blue" accentDim={DB_BLUE_DIM} fullWidth={!hasA}/>}
+        {!hasA&&!hasB&&(
+          <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,color:"#2a4a2a"}}>
             <div style={{fontSize:72}}>🏭</div>
             <div style={{fontSize:32,fontWeight:700,letterSpacing:2}}>생산확정 항목 없음</div>
           </div>
@@ -486,8 +492,10 @@ function DashboardView({orders,pMaster,sMaster,channels}){
   // ── 생산현황 화면 ──
   const ScreenStatus=()=>{
     const allDone=[...orders].filter(o=>o.status==="완료"&&(o.plan_date||"").slice(0,10)===todayDate);
-    const totalQty=confirmed.reduce((s,o)=>s+o.qty,0);
-    const maxQtyAll=Math.max(...confirmed.map(o=>o.qty),1);
+    const lineAQty=lineA.reduce((s,o)=>s+o.qty,0);
+    const lineBQty=lineB.reduce((s,o)=>s+o.qty,0);
+    const totalQty=lineAQty+lineBQty;
+    const maxQtyAll=Math.max(...[...lineA,...lineB].map(o=>o.qty),1);
 
     // 업체별 집계
     const chSummary={};
@@ -499,7 +507,7 @@ function DashboardView({orders,pMaster,sMaster,channels}){
     const chSummaryArr=Object.entries(chSummary).sort((a,b)=>b[1].qty-a[1].qty);
 
     // 글자 크기 자동 조절 — 건수 많을수록 작게
-    const totalItems=confirmed.length;
+    const totalItems=lineA.length+lineB.length;
     const nameFontSize=totalItems>10?13:totalItems>6?15:17;
     const qtyFontSize=totalItems>10?16:totalItems>6?18:22;
 
@@ -590,9 +598,11 @@ function DashboardView({orders,pMaster,sMaster,channels}){
             </div>
           </div>
         )}
-        {/* 확정 건별 전체 표시 */}
+        {/* A/B 라인 — 건별 전체 표시 */}
         <div style={{display:"flex",gap:14,alignItems:"flex-start"}}>
-          <LineCol label="📋 생산확정" accent="green" list={confirmed}/>
+          <LineCol label="🟢 A 라인" accent="green" list={lineA}/>
+          <div style={{width:2,background:"linear-gradient(180deg,transparent,#3a4a3a,transparent)",alignSelf:"stretch",flexShrink:0}}/>
+          <LineCol label="🔵 B 라인" accent="blue" list={lineB}/>
         </div>
       </div>
     );
@@ -609,7 +619,10 @@ function DashboardView({orders,pMaster,sMaster,channels}){
         </div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <span style={{background:"rgba(0,255,136,.08)",border:"1px solid rgba(0,255,136,.15)",borderRadius:6,padding:"3px 12px",fontSize:11,color:"#3a6a3a",fontWeight:700}}>
-            📋 생산확정 {confirmed.length}건
+            🟢 A라인 {lineA.length}건
+          </span>
+          <span style={{background:"rgba(68,170,255,.08)",border:"1px solid rgba(68,170,255,.15)",borderRadius:6,padding:"3px 12px",fontSize:11,color:"#3a5a8a",fontWeight:700}}>
+            🔵 B라인 {lineB.length}건
           </span>
           <span style={{fontSize:11,color:"#3a5a3a",fontFamily:"monospace",background:"rgba(0,0,0,.3)",border:"1px solid #2a3a2a",borderRadius:6,padding:"3px 10px"}}>
             {dbScreen==="order"?"📋 생산순서":"📊 현황"} {dbScreen==="order"?ORDER_SEC:STATUS_SEC}s
@@ -835,23 +848,27 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
   const[editing,setEditing]=useState(false);
   const[qty,setQty]=useState(String(order.qty));
   const[editChId,setEditChId]=useState("");
+  const[editLine,setEditLine]=useState(order.line||"A");
   const[editVendor,setEditVendor]=useState(order.bulk_vendor||"");
   const inpS={background:"rgba(255,255,255,.1)",border:"1px solid #7a8a7055",borderRadius:6,color:"#f0e6d3",padding:"5px 8px",fontSize:13,outline:"none",fontFamily:"inherit"};
   const activeChannels=channels.filter(c=>c.active!==false);
   const startEdit=()=>{
     const cur=channels.find(c=>c.name===order.channel);
     setEditChId(cur?String(cur.id):activeChannels[0]?String(activeChannels[0].id):"");
-    setQty(String(order.qty));setEditVendor(order.bulk_vendor||"");setEditing(true);
+    setQty(String(order.qty));setEditLine(order.line||"A");setEditVendor(order.bulk_vendor||"");setEditing(true);
   };
   const saveEdit=()=>{
     const ch=channels.find(c=>String(c.id)===String(editChId));
     const chName=ch?.name||order.channel;
     const vendor=isBulkCh(chName)?editVendor.trim():"";
     if(isBulkCh(chName)&&!vendor)return alert("대량납품 업체명을 입력해주세요.");
-    updateOrder(order.id,parseInt(qty)||order.qty,chName,vendor||null);setEditing(false);
+    updateOrder(order.id,parseInt(qty)||order.qty,chName,editLine,vendor||null);setEditing(false);
   };
   const moveBtn={background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",borderRadius:5,color:"#a8b8a0",padding:"3px 7px",fontSize:13,cursor:"pointer",fontFamily:"inherit",lineHeight:1};
   const ch=channels.find(c=>c.name===order.channel);
+  const lineColor=order.line==="B"?"#5a8fc0":"#6a9a5a";
+  const lineBg=order.line==="B"?"rgba(50,100,180,.25)":"rgba(60,120,60,.25)";
+  const lineBorder=order.line==="B"?"#5a8fc055":"#6a9a5a55";
 
   // 3단계 색상
   const isConfirmed=order.status==="확정";
@@ -879,6 +896,10 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
         )}
         {order.plan_date&&<span style={{background:"rgba(90,140,200,.25)",border:"1px solid #5a8fc055",color:"#8ac8d8",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>📅 {order.plan_date}</span>}
         <span style={{background:"#5a7a4a",color:"#fff",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:700}}>P{order.priority}</span>
+        {/* 라인 뱃지 */}
+        <span style={{background:lineBg,border:"1px solid "+lineBorder,color:lineColor,borderRadius:6,padding:"2px 9px",fontSize:12,fontWeight:900,letterSpacing:1}}>
+          {order.line==="B"?"🔵 B라인":"🟢 A라인"}
+        </span>
         <span style={{color:"#9a7050",fontSize:12}}>[{order.p_code}]</span>
         <span style={{fontWeight:700,fontSize:15,color:"#f5c97a"}}>{pName(order.p_code)}</span>
         {order.channel&&<ChannelBadge name={order.channel} color={ch?.color} color2={ch?.color2} size="sm"/>}
@@ -896,6 +917,10 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
             {isBulkCh(channels.find(c=>String(c.id)===String(editChId))?.name)&&(
               <input type="text" value={editVendor} onChange={e=>setEditVendor(e.target.value)} placeholder="납품 업체명" style={{...inpS,width:130,border:"1px solid #f2c94c88"}}/>
             )}
+            <select value={editLine} onChange={e=>setEditLine(e.target.value)} style={{...inpS,cursor:"pointer",width:90}}>
+              <option value="A">🟢 A라인</option>
+              <option value="B">🔵 B라인</option>
+            </select>
             <button onClick={saveEdit} style={{...primaryBtn,fontSize:12,padding:"4px 12px"}}>저장</button>
             <button onClick={()=>setEditing(false)} style={{...delBtn,fontSize:12,padding:"4px 10px"}}>취소</button>
           </>
@@ -1204,7 +1229,7 @@ function App(){
   const[todayDraft,setTodayDraft]=useState({workers:"",hours:8,overtime:0});
   const[todayEditing,setTodayEditing]=useState(false);
   const[todaySaving,setTodaySaving]=useState(false);
-  const[orderForm,setOrderForm]=useState({pCode:"",qty:"",channelId:"",bulkVendor:""});
+  const[orderForm,setOrderForm]=useState({pCode:"",qty:"",channelId:"",line:"A",bulkVendor:""});
   // planDate: 동적 기본값 (항상 today 기준)
   const[planInfo,setPlanInfo]=useState(()=>{try{const s=localStorage.getItem("planInfo");return s?JSON.parse(s):{planDate:today()};}catch{return{planDate:today()};}});
   const[showPlanSetting,setShowPlanSetting]=useState(false);
@@ -1219,7 +1244,7 @@ function App(){
   // 완제품 생산 조회: printDate 기준 (5번)
   const[viewDate,setViewDate]=useState(today()); // 조회 날짜
   const[orderTab,setOrderTab]=useState("생산계획"); // 생산계획/생산확정/완료 탭
-  const[doneLineFilter,setDoneLineFilter]=useState("미입력"); // 완료 탭 필터: 전체/미입력 — 기본값은 ERP 미입력건
+  const[doneLineFilter,setDoneLineFilter]=useState("미입력"); // 완료 탭 라인 필터: 전체/A/B/미입력 — 기본값은 ERP 미입력건
   // ── 분석2 (요일별 생산량 / 업체별 낱개) ──
   const[a2Metric,setA2Metric]=useState("unit"); // unit: 낱개 기준 / qty: 완제품 기준
   const[a2Mode,setA2Mode]=useState("avg");      // avg: 생산일 평균 / sum: 합계
@@ -1776,7 +1801,7 @@ function App(){
           if(rawStr&&!pd){dateErrors.push("행"+(i+1)+": '"+rawDate+"' (유효하지 않은 날짜)");continue;}
           if(pd)planDateStr=pd.toISOString().slice(0,10);
         }
-        toInsert.push({p_code:pCode,channel:String(rawCo||"").trim()||"미입력",qty,priority:nextPBase+offset,status:"대기",plan_date:planDateStr});
+        toInsert.push({p_code:pCode,channel:String(rawCo||"").trim()||"미입력",qty,priority:nextPBase+offset,status:"대기",plan_date:planDateStr,line:"A"});
         offset++;
       }
       if(dateErrors.length){alert("❌ 날짜 형식 오류 (YYYYMMDD 8자리 숫자만 허용)\n\n"+dateErrors.join("\n")+"\n\n업로드를 중단합니다.");e.target.value="";return;}
@@ -1803,13 +1828,13 @@ function App(){
     const nextP=await getNextPriority();
     // ★ UI 즉시 반영
     const tempId="temp_"+Date.now();
-    const tempOrder={id:tempId,p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,bulk_vendor:bulkVendor||null};
+    const tempOrder={id:tempId,p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,line:orderForm.line||"A",bulk_vendor:bulkVendor||null};
     setOrders(prev=>[...prev,tempOrder]);
     setOrderForm(f=>({...f,qty:""}));
     // ★ 잠금 즉시 해제 (빠른 연속 입력 가능)
     orderSubmitting.current=false;
     // ★ DB 저장 백그라운드
-    const{data,error}=await sb.from("drip2_orders").insert({p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,bulk_vendor:bulkVendor||null}).select().single();
+    const{data,error}=await sb.from("drip2_orders").insert({p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,line:orderForm.line||"A",bulk_vendor:bulkVendor||null}).select().single();
     if(error){
       setOrders(prev=>prev.filter(o=>o.id!==tempId));
       alert("저장 오류: "+error.message);return;
@@ -1909,8 +1934,8 @@ function App(){
       });
     }
   };
-  const updateOrder=async(id,qty,channel,bulkVendor)=>{
-    const upd={qty,channel,bulk_vendor:isBulkCh(channel)?(bulkVendor||null):null};
+  const updateOrder=async(id,qty,channel,line,bulkVendor)=>{
+    const upd={qty,channel,line:line||"A",bulk_vendor:isBulkCh(channel)?(bulkVendor||null):null};
     const{error}=await sb.from("drip2_orders").update(upd).eq("id",id);
     if(error)return alert("수정 오류: "+error.message);
     setOrders(prev=>prev.map(o=>o.id===id?{...o,...upd}:o));
@@ -2313,6 +2338,9 @@ function App(){
       const chColor=ch?.color||"#5a6a5a";
       const chColor2=ch?.color2||null;
       const companyDisplay=chDisplay(o);
+      const lineLabel=o.line==="B"?"🔵 B라인":"🟢 A라인";
+      const lineColor=o.line==="B"?"#1a5fa8":"#2a7a2a";
+      const lineBadge="<span style='display:inline-block;background:"+lineColor+";color:#fff;border:3px solid rgba(255,255,255,.8);border-radius:8px;padding:6px 16px;font-weight:900;font-size:15px;-webkit-print-color-adjust:exact;print-color-adjust:exact;letter-spacing:.5px;margin-right:8px;'>"+lineLabel+"</span>";
       const details=(o.detail?.details||[]).map(d=>"<tr><td style='padding:4px 10px;border:1px solid #ccc;'>"+d.sCode+"</td><td style='padding:4px 10px;border:1px solid #ccc;'>"+sName(d.sCode)+"</td><td style='padding:4px 10px;border:1px solid #ccc;text-align:center;'>"+d.total+"개</td><td style='padding:4px 10px;border:1px solid #ccc;text-align:center;'>"+fmtDate(d.expiry)+"</td></tr>").join("");
       const detailTable=o.detail?.details?.length>0?"<table style='width:100%;border-collapse:collapse;margin-top:6px;font-size:12px;'><tr style='background:#f0f0f0;'><th style='padding:4px 10px;border:1px solid #ccc;'>코드</th><th style='padding:4px 10px;border:1px solid #ccc;'>낱개명</th><th style='padding:4px 10px;border:1px solid #ccc;'>수량</th><th style='padding:4px 10px;border:1px solid #ccc;'>소비기한</th></tr>"+details+"</table>":"";
       // 반반 색상 뱃지 (8번, 9번 — 인쇄용 크게)
@@ -2321,7 +2349,7 @@ function App(){
         :chColor;
       const chBadge="<span style='display:inline-block;background:"+badgeBg+";color:#fff;border:3px solid rgba(255,255,255,.8);border-radius:8px;padding:6px 22px;font-weight:700;font-size:17px;-webkit-print-color-adjust:exact;print-color-adjust:exact;text-shadow:0 1px 3px rgba(0,0,0,.6);letter-spacing:.5px;'>"+companyDisplay+"</span>";
       return "<div style='border:2px solid #ccc;border-radius:8px;padding:14px 18px;margin-bottom:16px;page-break-inside:avoid;'>"
-        +"<div style='display:flex;align-items:center;gap:12px;background:#f5f5f5;border-radius:6px;padding:10px 14px;margin-bottom:10px;border:1px solid #ddd;'>"+chBadge
+        +"<div style='display:flex;align-items:center;gap:12px;background:#f5f5f5;border-radius:6px;padding:10px 14px;margin-bottom:10px;border:1px solid #ddd;'>"+lineBadge+chBadge
         +"<span style='background:#5a7a3a;color:#fff;border-radius:5px;padding:4px 12px;font-weight:700;font-size:14px;'>📅 "+(o.plan_date||"-")+"</span>"
         +"</div>"
         +"<div style='display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;'>"
@@ -2569,6 +2597,7 @@ function App(){
   const tdDoneQty=tdDone.reduce((a,o)=>a+(o.qty||0),0);
   const tdPlanQty=tdOrders.reduce((a,o)=>a+(o.qty||0),0);
   const tdDonePack=tdDone.reduce((a,o)=>a+(o.qty||0)*bomOf(o.p_code).reduce((s,c)=>s+(c.qty||0),0),0);
+  const tdLineH=ln=>tdDone.filter(o=>(o.line||"A")===ln).reduce((a,o)=>a+tdHoursOf(o),0);
   const tdNoSpeed=[...new Set(tdOrders.filter(o=>!speedOf(o.p_code)).map(o=>o.p_code))];
   const tdAvail=(todayNote&&todayNote.workers!=null&&todayNote.hours!=null)?(Number(todayNote.workers)*Number(todayNote.hours)+(Number(todayNote.overtime)||0)):null;
   const tdRate=tdAvail?tdDoneH/tdAvail*100:null;      // 실적 가동률 (완료 기준)
@@ -2661,6 +2690,8 @@ function App(){
           {/* 시간 근거 */}
           <div style={{display:"flex",flexDirection:"column",gap:4,fontSize:12,color:"#a8b8a0",background:"rgba(255,255,255,.04)",borderRadius:8,padding:"8px 10px",marginBottom:8}}>
             <div style={{display:"flex",justifyContent:"space-between"}}><span>✅ 완료 생산시간</span><b style={{color:"#e8f0e0"}}>{tdDoneH.toFixed(2)}h</b></div>
+            <div style={{display:"flex",justifyContent:"space-between",paddingLeft:10,fontSize:11}}><span>🟢 A라인</span><span style={{color:"#8ecf90"}}>{tdLineH("A").toFixed(2)}h</span></div>
+            <div style={{display:"flex",justifyContent:"space-between",paddingLeft:10,fontSize:11}}><span>🔵 B라인</span><span style={{color:"#8ac8f0"}}>{tdLineH("B").toFixed(2)}h</span></div>
             <div style={{display:"flex",justifyContent:"space-between"}}><span>📋 확정(진행중)</span><b style={{color:"#f5c97a"}}>{tdConfH.toFixed(2)}h</b></div>
             <div style={{display:"flex",justifyContent:"space-between"}}><span>🗓 오늘 계획 전체</span><b style={{color:"#e8f0e0"}}>{tdPlanH.toFixed(2)}h</b></div>
             <div style={{display:"flex",justifyContent:"space-between",borderTop:"1px solid #7a8a7033",paddingTop:4,marginTop:2}}><span>👥 가용시간</span><b style={{color:tdAvail?"#f5c97a":"#e89090"}}>{tdAvail?tdAvail.toLocaleString()+"h":"미입력"}</b></div>
@@ -2859,6 +2890,20 @@ function App(){
                   </div>
                 )}
                 <LblInp label="생산수량" type="number" value={orderForm.qty} onChange={v=>setOrderForm(f=>({...f,qty:v}))} placeholder="0" width={90}/>
+                {/* 라인 선택 */}
+                <div style={{alignSelf:"flex-end"}}>
+                  <div style={{fontSize:12,color:"#c8a06a",marginBottom:4}}>생산 라인</div>
+                  <div style={{display:"flex",gap:6}}>
+                    {["A","B"].map(l=>(
+                      <button key={l} onClick={()=>setOrderForm(f=>({...f,line:l}))}
+                        style={{padding:"6px 16px",borderRadius:8,border:"2px solid "+(orderForm.line===l?(l==="A"?"#6a9a5a":"#5a8fc0"):"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,
+                          background:orderForm.line===l?(l==="A"?"rgba(60,120,60,.35)":"rgba(50,100,180,.35)"):"rgba(255,255,255,.06)",
+                          color:orderForm.line===l?(l==="A"?"#8ecf90":"#8ac8f0"):"#8a9a88"}}>
+                        {l==="A"?"🟢 A라인":"🔵 B라인"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <button onClick={addOrder} style={{...primaryBtn,alignSelf:"flex-end"}}>주문 등록</button>
               </div>
             </div>
@@ -2887,19 +2932,23 @@ function App(){
               })()}
             </div>
 
-            {/* 완료 탭 — 필터 (전체 / ERP 미입력) */}
+            {/* 완료 탭 — 라인 필터 (전체/A라인/B라인) */}
             {orderTab==="완료"&&(()=>{
               const doneAll=viewOrders.filter(o=>o.status==="완료");
+              const doneA=doneAll.filter(o=>(o.line||"A")==="A");
+              const doneB=doneAll.filter(o=>o.line==="B");
               return(
                 <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
-                  <span style={{color:"#a8b8a0",fontSize:13,fontWeight:700}}>필터:</span>
+                  <span style={{color:"#a8b8a0",fontSize:13,fontWeight:700}}>라인 필터:</span>
                   {[
                     ["전체",doneAll.length,"#6fcf97"],
+                    ["A",doneA.length,"#8ecf90"],
+                    ["B",doneB.length,"#8ac8f0"],
                     ["미입력",doneAll.filter(o=>!o.erp_done).length,"#f0b070"],
                   ].map(([l,cnt,color])=>(
                     <button key={l} onClick={()=>setDoneLineFilter(l)}
                       style={{background:doneLineFilter===l?color+"33":"rgba(255,255,255,.06)",border:"1px solid "+(doneLineFilter===l?color+"88":"#7a8a7044"),borderRadius:20,color:doneLineFilter===l?color:"#c8c8b8",padding:"5px 16px",fontSize:13,fontWeight:doneLineFilter===l?700:400,cursor:"pointer",fontFamily:"inherit"}}>
-                      {l==="전체"?"⚪ 전체":"⚠ ERP 미입력"} <span style={{marginLeft:4,opacity:.8}}>{cnt}건</span>
+                      {l==="전체"?"⚪ 전체":l==="A"?"🟢 A라인":l==="B"?"🔵 B라인":"⚠ ERP 미입력"} <span style={{marginLeft:4,opacity:.8}}>{cnt}건</span>
                     </button>
                   ))}
                 </div>
@@ -3150,34 +3199,65 @@ function App(){
                 ))
             )}
 
-            {/* 생산확정 목록 — 순위 + 클릭/드래그 재정렬 */}
+            {/* 생산확정 목록 — A/B 라인별 순위 + 클릭/드래그 재정렬 */}
             {orderTab==="생산확정"&&(
               viewOrders.filter(o=>o.status==="확정").length===0
                 ?<div style={{textAlign:"center",color:"#909888",padding:26,fontSize:14}}>생산확정 주문이 없습니다.</div>
                 :<div>
                   <div style={{fontSize:12,color:"#8a9a88",marginBottom:10,padding:"6px 12px",background:"rgba(255,255,255,.04)",borderRadius:8,border:"1px solid #7a8a7033"}}>
-                    ☰ 드래그 또는 <b style={{color:"#c8a06a"}}>순위 뱃지 클릭</b>으로 순위 변경
+                    ☰ 드래그 또는 <b style={{color:"#c8a06a"}}>순위 뱃지 클릭</b>으로 순위 변경 · <b style={{color:"#8ac8f0"}}>"⇄ 라인 전환" 버튼</b>으로 A/B 라인 이동
                   </div>
                   {(()=>{
                     const confirmedList=viewOrders.filter(o=>o.status==="확정");
-                    const handleRankClick=(order,myRank)=>{
-                      const total=confirmedList.length;
-                      const input=window.prompt(`현재 ${myRank}순위 입니다.\n이동할 순위를 입력하세요 (1~${total}):`);
+                    // 라인별 순서 계산
+                    const lineARanks={};const lineBRanks={};
+                    let ai=1,bi=1;
+                    confirmedList.forEach(o=>{
+                      if((o.line||"A")==="A")lineARanks[o.id]=ai++;
+                      else lineBRanks[o.id]=bi++;
+                    });
+                    const lineAList=confirmedList.filter(o=>(o.line||"A")==="A");
+                    const lineBList=confirmedList.filter(o=>o.line==="B");
+
+                    const handleLineSwitch=async(order,e)=>{
+                      e.stopPropagation();
+                      const myLine=order.line||"A";
+                      const newLine=myLine==="A"?"B":"A";
+                      if(!window.confirm(`${myLine}라인 → ${newLine}라인으로 이동하시겠습니까?`))return;
+                      setOrders(prev=>prev.map(o=>o.id===order.id?{...o,line:newLine}:o));
+                      const{error}=await sb.from("drip2_orders").update({line:newLine}).eq("id",order.id);
+                      if(error){
+                        alert("라인 전환 저장 실패: "+error.message);
+                        setOrders(prev=>prev.map(o=>o.id===order.id?{...o,line:myLine}:o));
+                      }
+                    };
+
+                    const handleRankClick=(order)=>{
+                      const myLine=order.line||"A";
+                      const sameLineList=myLine==="A"?lineAList:lineBList;
+                      const myRank=myLine==="A"?lineARanks[order.id]:lineBRanks[order.id];
+                      const total=sameLineList.length;
+                      const input=window.prompt(`현재 ${myLine}-${myRank} 입니다.\n${myLine}라인에서 이동할 순위를 입력하세요 (1~${total}):`);
                       if(!input)return;
                       const target=parseInt(input);
                       if(isNaN(target)||target<1||target>total){alert(`1~${total} 사이 숫자를 입력하세요.`);return;}
                       if(target===myRank)return;
-                      const reordered=[...confirmedList];
+                      // 같은 라인 내 재정렬
+                      const reordered=[...sameLineList];
                       const[moved]=reordered.splice(myRank-1,1);
                       reordered.splice(target-1,0,moved);
-                      const sortedPriorities=confirmedList.map(o=>o.priority).sort((a,b)=>a-b);
+                      const sortedPriorities=sameLineList.map(o=>o.priority).sort((a,b)=>a-b);
                       const updates=reordered.map((o,i)=>({id:o.id,priority:sortedPriorities[i]}));
                       setOrders(prev=>prev.map(o=>{const u=updates.find(x=>x.id===o.id);return u?{...o,priority:u.priority}:o;}));
                       Promise.all(updates.map(u=>sb.from("drip2_orders").update({priority:u.priority}).eq("id",u.id)));
                     };
 
                     return confirmedList.map((order,idx)=>{
-                      const myRank=idx+1;
+                      const myLine=order.line||"A";
+                      const myRank=myLine==="A"?lineARanks[order.id]:lineBRanks[order.id];
+                      const isA=myLine==="A";
+                      const badgeBg=isA?"linear-gradient(135deg,#2a5a2a,#4a8a4a)":"linear-gradient(135deg,#1a3a6a,#2a5a9a)";
+                      const badgeGlow=isA?"rgba(0,200,80,.5)":"rgba(68,170,255,.5)";
                       const isDragTarget=dragOverId===order.id;
                       return(
                         <div key={order.id}
@@ -3189,15 +3269,22 @@ function App(){
                           style={{marginBottom:8,transition:"opacity .15s",opacity:dragItem.current===order.id?.4:1}}>
                           {isDragTarget&&<div style={{height:3,background:"#c8821a",borderRadius:2,marginBottom:4,boxShadow:"0 0 8px #c8821a"}}/>}
                           <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
-                            {/* 순위 뱃지 */}
+                            {/* A/B 라인 순위 뱃지 */}
                             <div style={{flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",gap:4,paddingTop:12}}>
                               <div
-                                onClick={()=>handleRankClick(order,myRank)}
-                                title="클릭해서 순위 변경"
-                                style={{background:"linear-gradient(135deg,#7a6020,#b08a30)",color:"#fff",borderRadius:7,minWidth:44,height:38,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:18,cursor:"pointer",userSelect:"none",boxShadow:"0 2px 6px rgba(0,0,0,.3)",padding:"0 6px"}}>
-                                {myRank}
+                                onClick={()=>handleRankClick(order)}
+                                title={`클릭해서 ${myLine}라인 순위 변경`}
+                                style={{background:badgeBg,color:"#fff",borderRadius:7,minWidth:44,height:38,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:13,cursor:"pointer",userSelect:"none",boxShadow:`0 2px 6px rgba(0,0,0,.3)`,padding:"0 6px",gap:1,flexDirection:"column",lineHeight:1}}>
+                                <span style={{fontSize:10,opacity:.85,letterSpacing:.5}}>{myLine}라인</span>
+                                <span style={{fontSize:18,lineHeight:1}}>{myRank}</span>
                               </div>
                               <div style={{fontSize:9,color:"#7a8a70",letterSpacing:.5}}>순위</div>
+                              <button
+                                onClick={e=>handleLineSwitch(order,e)}
+                                title={`클릭해서 ${myLine==="A"?"B":"A"}라인으로 이동`}
+                                style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7055",borderRadius:6,color:"#c8ddb8",fontSize:11,fontWeight:700,padding:"5px 8px",cursor:"pointer",fontFamily:"inherit",minWidth:44,whiteSpace:"nowrap"}}>
+                                ⇄ {myLine==="A"?"B":"A"}로
+                              </button>
                               <div style={{color:"#5a6a50",fontSize:16,cursor:"grab",lineHeight:1}}>⠿</div>
                             </div>
                             {/* 체크박스 */}
@@ -3223,7 +3310,7 @@ function App(){
 
             {/* 완료 목록 */}
             {orderTab==="완료"&&(()=>{
-              const doneFiltered=viewOrders.filter(o=>o.status==="완료").filter(o=>doneLineFilter==="미입력"?!o.erp_done:true);
+              const doneFiltered=viewOrders.filter(o=>o.status==="완료").filter(o=>doneLineFilter==="전체"?true:doneLineFilter==="미입력"?!o.erp_done:(doneLineFilter==="A"?(o.line||"A")==="A":o.line==="B"));
               return doneFiltered.length===0
                 ?<div style={{textAlign:"center",color:"#909888",padding:26,fontSize:14}}>완료 주문이 없습니다.</div>
                 :doneFiltered.map((order,idx,arr)=>(
@@ -4012,6 +4099,36 @@ function App(){
         {tab==="설정"&&(
           <div>
             <SecTitle icon="⚙️" title="시스템 설정"/>
+
+            {/* 생산 라인 안내 */}
+            <div style={{background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"20px 22px",marginBottom:24}}>
+              <div style={{fontSize:15,fontWeight:700,color:"#c8ddb8",marginBottom:6}}>🏭 생산 라인 설정</div>
+              <div style={{fontSize:12,color:"#8a9a88",marginBottom:16}}>생산 주문 등록 시 A라인 / B라인을 선택합니다. 전광판에서 라인별로 구분해서 표시됩니다.</div>
+              <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                <div style={{flex:1,minWidth:200,background:"rgba(60,120,60,.15)",border:"2px solid #6a9a5a55",borderRadius:10,padding:"16px 20px"}}>
+                  <div style={{fontSize:18,fontWeight:900,color:"#8ecf90",marginBottom:8}}>🟢 A 라인</div>
+                  <div style={{fontSize:13,color:"#5a8a5a",lineHeight:1.7}}>
+                    <div>완제품 생산 주문 등록 시 <b style={{color:"#8ecf90"}}>A라인</b> 선택</div>
+                    <div>전광판 왼쪽 컬럼에 표시</div>
+                    <div style={{marginTop:8,fontSize:12,color:"#4a7a4a"}}>기본값: 신규 주문은 A라인으로 등록</div>
+                  </div>
+                </div>
+                <div style={{flex:1,minWidth:200,background:"rgba(50,100,180,.15)",border:"2px solid #5a8fc055",borderRadius:10,padding:"16px 20px"}}>
+                  <div style={{fontSize:18,fontWeight:900,color:"#8ac8f0",marginBottom:8}}>🔵 B 라인</div>
+                  <div style={{fontSize:13,color:"#4a6a9a",lineHeight:1.7}}>
+                    <div>완제품 생산 주문 등록 시 <b style={{color:"#8ac8f0"}}>B라인</b> 선택</div>
+                    <div>전광판 오른쪽 컬럼에 표시</div>
+                    <div style={{marginTop:8,fontSize:12,color:"#3a5a8a"}}>주문 등록 후 ✏️ 수정으로 라인 변경 가능</div>
+                  </div>
+                </div>
+              </div>
+              <div style={{marginTop:14,padding:"10px 14px",background:"rgba(200,130,26,.08)",border:"1px solid #c8821a33",borderRadius:8,fontSize:12,color:"#c8a06a",lineHeight:1.6}}>
+                ⚠️ <b>DB 설정 필요 (최초 1회)</b> — Supabase 대시보드 SQL Editor에서 아래 쿼리를 실행하세요:<br/>
+                <code style={{display:"block",marginTop:6,padding:"8px 12px",background:"rgba(0,0,0,.3)",borderRadius:6,color:"#f5c97a",fontSize:11,fontFamily:"monospace",letterSpacing:.3}}>
+                  ALTER TABLE drip2_orders ADD COLUMN IF NOT EXISTS line TEXT DEFAULT 'A';
+                </code>
+              </div>
+            </div>
 
             {/* 업체 관리 */}
             <div style={{background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"20px 22px",marginBottom:24}}>
