@@ -29,12 +29,51 @@ select option { background: #2e2e2c; color: #f0ede8; }
 
 // ════════════════════════════════════════════
 // ★ 앱 버전 — 배포할 때마다 이 값만 바꾸면, 켜져 있는 모든 화면(전광판 등)이 10분 안에 자동 새로고침됨
-const APP_VERSION="2026-10-14-1";
-// 대량납품 업체 판별 (출고업체명이 "대량납품"이면 실제 납품업체명을 별도 입력)
+const APP_VERSION="2026-10-20-2";
+// 대량납품 업체 판별 (DB에 use_vendor 설정이 없을 때의 기본값 판단용)
 const BULK_CH="대량납품";
 const isBulkCh=name=>(name||"").trim()===BULK_CH;
-// 화면 표시용 업체명: 대량납품이면 "대량납품 · 업체명"
-const chDisplay=o=>(o&&isBulkCh(o.channel)&&o.bulk_vendor)?o.channel+" · "+o.bulk_vendor:(o?.channel||"-");
+// 화면 표시용 업체명: 납품업체명이 있으면 "업체 · 납품업체명"
+const chDisplay=o=>(o&&o.bulk_vendor)?o.channel+" · "+o.bulk_vendor:(o?.channel||"-");
+// ── 출고 추가정보 (업체별로 설정 탭에서 사용/미사용 선택) ──
+// key: 화면용 키, col: drip2_channels 컬럼명
+const SHIP_FIELDS=[
+  {key:"date",col:"use_ship_date",label:"📅 출고일"},
+  {key:"type",col:"use_ship_type",label:"🚚 배송구분"},
+  {key:"note",col:"use_note",label:"📝 비고"},
+  {key:"vendor",col:"use_vendor",label:"🏢 납품업체명"},
+];
+// 배송구분 기본값 — 설정 탭의 "배송구분 관리"(drip2_ship_types)가 비어있거나 불러오지 못할 때만 사용
+const DEFAULT_SHIP_TYPES=["택배","화물","직배송","퀵","방문수령"];
+// 배송구분 선택 상자 — 목록은 설정에서 관리, 목록에 없는 기존 값도 그대로 표시
+function ShipTypeSelect({value,onChange,types,style}){
+  const list=types&&types.length?types:DEFAULT_SHIP_TYPES;
+  const extra=value&&!list.includes(value)?[value]:[];
+  return(
+    <select value={value||""} onChange={e=>onChange(e.target.value)} style={{cursor:"pointer",...style}}>
+      <option value="">선택 안 함</option>
+      {[...list,...extra].map(t=><option key={t} value={t}>{t}{extra.includes(t)?" (목록에 없음)":""}</option>)}
+    </select>
+  );
+}
+// 업체별 사용 여부 — 값이 없으면 출고일/배송구분/비고는 사용, 납품업체명은 "대량납품"만 사용
+const chFlags=ch=>({
+  date:ch?.use_ship_date!==false,
+  type:ch?.use_ship_type!==false,
+  note:ch?.use_note!==false,
+  vendor:ch?.use_vendor!=null?!!ch.use_vendor:isBulkCh(ch?.name),
+});
+// 주문 저장용 값 정리 — 사용 안 하는 항목은 null로 저장
+const buildShipFields=(ch,v)=>{
+  const f=chFlags(ch);
+  return{
+    bulk_vendor:f.vendor?((v.vendor||"").trim()||null):null,
+    ship_date:f.date?(v.date||null):null,
+    ship_type:f.type?((v.type||"").trim()||null):null,
+    ship_note:f.note?((v.note||"").trim()||null):null,
+  };
+};
+const fmtShipDate=d=>d?String(d).slice(0,10):"";
 // 입력 중 끊김 방지: 새 버전이 있어도 "입력칸 사용 중"이거나 "최근 1분 내 조작"이 있으면 기다렸다가 새로고침
 (function autoUpdateCheck(){
   let lastActive=Date.now(),pending=false;
@@ -177,7 +216,7 @@ function ChannelBadge({name,color,color2,size="md"}){
   const fs=size==="sm"?11:13;
   const innerStyle=bg2?{background:"linear-gradient(90deg,"+bg+" 50%,"+bg2+" 50%)"}:{background:bg};
   return(
-    <span style={{...innerStyle,color:"#fff",border:"2px solid rgba(255,255,255,.75)",borderRadius:6,padding:pad,fontSize:fs,fontWeight:700,display:"inline-flex",alignItems:"center",whiteSpace:"nowrap",textShadow:"0 1px 2px rgba(0,0,0,.6)"}}>
+    <span style={{...innerStyle,color:"#fff",border:"2px solid rgba(255,255,255,.75)",borderRadius:6,padding:pad,fontSize:fs,fontWeight:700,display:"inline-flex",alignItems:"center",whiteSpace:"normal",wordBreak:"keep-all",lineHeight:1.25,maxWidth:260,textAlign:"center",textShadow:"0 1px 2px rgba(0,0,0,.6)"}}>
       {name||"-"}
     </span>
   );
@@ -425,12 +464,12 @@ function DashboardView({orders,pMaster,sMaster,channels}){
                       <span style={{fontSize:FS.name,fontWeight:900,color:"#f0f8f0",lineHeight:1.1,wordBreak:"keep-all"}}>{pName(o.p_code)}</span>
                       <span style={{fontSize:FS.qty,fontWeight:900,color:qtyColor,fontFamily:"monospace",textShadow:isTop?`0 0 14px ${qtyGlow}`:"none",lineHeight:1}}>{o.qty.toLocaleString()}</span>
                       <span style={{fontSize:FS.unit,color:chipLabel}}>개</span>
-                      <span style={{background:chGrad,color:"#fff",border:"2px solid rgba(255,255,255,.55)",borderRadius:6,padding:fullWidth?(isTop?"8px 20px":"4px 12px"):(isTop?"4px 10px":"2px 8px"),fontSize:FS.badge,fontWeight:700,textShadow:"0 1px 3px rgba(0,0,0,.6)",whiteSpace:"nowrap"}}>{chDisplay(o)}</span>
+                      <span style={{background:chGrad,color:"#fff",border:"2px solid rgba(255,255,255,.55)",borderRadius:6,padding:fullWidth?(isTop?"8px 20px":"4px 12px"):(isTop?"4px 10px":"2px 8px"),fontSize:FS.badge,fontWeight:700,textShadow:"0 1px 3px rgba(0,0,0,.6)",whiteSpace:"normal",wordBreak:"keep-all",lineHeight:1.25,maxWidth:"100%"}}>{chDisplay(o)}</span>
                     </div>
 
-                    {/* ── 예정일·LOT·소비기한 ── */}
+                    {/* ── 예정일·LOT·소비기한 + 출고정보 ── */}
                     <div style={{display:"flex",gap:fullWidth?10:6,flexWrap:"wrap"}}>
-                      {[["예정일",o.plan_date?fd(o.plan_date):"-"],["LOT",o.detail?.lot?"LOT "+o.detail.lot:"-"],["소비기한",o.detail?.finExp?fd(o.detail.finExp):"-"]].map(([l,v])=>{
+                      {[["예정일",o.plan_date?fd(o.plan_date):"-"],["LOT",o.detail?.lot?"LOT "+o.detail.lot:"-"],["소비기한",o.detail?.finExp?fd(o.detail.finExp):"-"],...(o.ship_date?[["출고일",fd(o.ship_date)]]:[]),...(o.ship_type?[["배송구분",o.ship_type]]:[])].map(([l,v])=>{
                         const isLot=l==="LOT";
                         const valSize=FS.val*1.4|0; // 전부 LOT 크기로 통일
                         return(
@@ -441,6 +480,9 @@ function DashboardView({orders,pMaster,sMaster,channels}){
                         );
                       })}
                     </div>
+                    {o.ship_note&&(
+                      <div style={{background:"rgba(242,201,76,.1)",border:"1px solid rgba(242,201,76,.45)",borderRadius:6,padding:fullWidth?(isTop?"6px 14px":"3px 10px"):(isTop?"3px 8px":"2px 6px"),fontSize:FS.val,fontWeight:700,color:"#f2c94c",wordBreak:"keep-all",lineHeight:1.35}}>📝 {o.ship_note}</div>
+                    )}
                     {isTop&&(o.detail?.details||[]).length>0&&(
                       <div style={{borderTop:"1px solid "+(accent==="green"?"rgba(0,255,136,.15)":"rgba(68,170,255,.15)"),paddingTop:fullWidth?(isTop?10:6):(isTop?6:4),marginTop:2}}>
                         <div style={{fontSize:FS.lbl,color:chipLabel,fontWeight:700,letterSpacing:1,marginBottom:fullWidth?(isTop?8:4):(isTop?5:3)}}>📦 낱개 투입</div>
@@ -544,7 +586,7 @@ function DashboardView({orders,pMaster,sMaster,channels}){
                   <div key={o.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",background:"rgba(255,255,255,.04)",borderRadius:7,border:"1px solid rgba(255,255,255,.06)"}}>
                     <span style={{width:20,fontSize:13,fontWeight:700,color:rankColor,fontFamily:"monospace",flexShrink:0}}>{i+1}</span>
                     <span style={{flex:1,fontSize:nameFontSize,fontWeight:700,color:"#d0e8d0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pName(o.p_code)}</span>
-                    <span style={{background:chGrad,color:"#fff",border:"1px solid rgba(255,255,255,.4)",borderRadius:4,padding:"1px 8px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",flexShrink:0}}>{chDisplay(o)}</span>
+                    <span title={chDisplay(o)} style={{background:chGrad,color:"#fff",border:"1px solid rgba(255,255,255,.4)",borderRadius:4,padding:"1px 8px",fontSize:11,fontWeight:700,whiteSpace:"normal",wordBreak:"keep-all",lineHeight:1.25,textAlign:"center",maxWidth:160,flexShrink:0}}>{chDisplay(o)}</span>
                     <div style={{width:80,height:7,background:"rgba(255,255,255,.07)",borderRadius:4,overflow:"hidden",flexShrink:0}}>
                       <div style={{height:"100%",width:Math.round(o.qty/maxQtyAll*100)+"%",background:`linear-gradient(90deg,${qtyDim},${qtyColor})`,borderRadius:4}}/>
                     </div>
@@ -844,25 +886,32 @@ function ProductSearchSelect({pMaster,value,onChange}){
 }
 
 // ══ OrderCard — 수정 시 업체 드롭다운 지원 ═
-function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confirmOrder,completeOrder,revertOrder,cancelOrder,addExtraQty,markErpDone,primaryBtn,delBtn,moveOrder,isFirst,isLast,channels}){
+function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confirmOrder,completeOrder,revertOrder,cancelOrder,addExtraQty,markErpDone,primaryBtn,delBtn,moveOrder,isFirst,isLast,channels,shipTypeNames}){
   const[editing,setEditing]=useState(false);
   const[qty,setQty]=useState(String(order.qty));
   const[editChId,setEditChId]=useState("");
   const[editLine,setEditLine]=useState(order.line||"A");
   const[editVendor,setEditVendor]=useState(order.bulk_vendor||"");
+  const[editShip,setEditShip]=useState({date:"",type:"",note:""});
   const inpS={background:"rgba(255,255,255,.1)",border:"1px solid #7a8a7055",borderRadius:6,color:"#f0e6d3",padding:"5px 8px",fontSize:13,outline:"none",fontFamily:"inherit"};
   const activeChannels=channels.filter(c=>c.active!==false);
+  const canEditMain=order.status==="대기"; // 수량·업체·라인은 대기 상태에서만, 출고정보는 언제든 수정 가능
   const startEdit=()=>{
     const cur=channels.find(c=>c.name===order.channel);
     setEditChId(cur?String(cur.id):activeChannels[0]?String(activeChannels[0].id):"");
-    setQty(String(order.qty));setEditLine(order.line||"A");setEditVendor(order.bulk_vendor||"");setEditing(true);
+    setQty(String(order.qty));setEditLine(order.line||"A");setEditVendor(order.bulk_vendor||"");
+    setEditShip({date:fmtShipDate(order.ship_date),type:order.ship_type||"",note:order.ship_note||""});
+    setEditing(true);
   };
-  const saveEdit=()=>{
-    const ch=channels.find(c=>String(c.id)===String(editChId));
-    const chName=ch?.name||order.channel;
-    const vendor=isBulkCh(chName)?editVendor.trim():"";
-    if(isBulkCh(chName)&&!vendor)return alert("대량납품 업체명을 입력해주세요.");
-    updateOrder(order.id,parseInt(qty)||order.qty,chName,editLine,vendor||null);setEditing(false);
+  const editCh=canEditMain?channels.find(c=>String(c.id)===String(editChId)):channels.find(c=>c.name===order.channel);
+  const editFlags=chFlags(editCh);
+  const saveEdit=async()=>{
+    const chName=editCh?.name||order.channel;
+    if(editFlags.vendor&&!editVendor.trim())return alert("납품 업체명을 입력해주세요.");
+    const ship=buildShipFields(editCh,{vendor:editVendor,date:editShip.date,type:editShip.type,note:editShip.note});
+    const patch=canEditMain?{qty:parseInt(qty)||order.qty,channel:chName,line:editLine||"A",...ship}:ship;
+    const ok=await updateOrder(order.id,patch);
+    if(ok!==false)setEditing(false);
   };
   const moveBtn={background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",borderRadius:5,color:"#a8b8a0",padding:"3px 7px",fontSize:13,cursor:"pointer",fontFamily:"inherit",lineHeight:1};
   const ch=channels.find(c=>c.name===order.channel);
@@ -903,32 +952,27 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
         <span style={{color:"#9a7050",fontSize:12}}>[{order.p_code}]</span>
         <span style={{fontWeight:700,fontSize:15,color:"#f5c97a"}}>{pName(order.p_code)}</span>
         {order.channel&&<ChannelBadge name={order.channel} color={ch?.color} color2={ch?.color2} size="sm"/>}
-        {isBulkCh(order.channel)&&order.bulk_vendor&&<span style={{background:"rgba(242,201,76,.15)",border:"1px solid #f2c94c66",color:"#f2c94c",borderRadius:6,padding:"2px 9px",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>🏢 {order.bulk_vendor}</span>}
+        {order.bulk_vendor&&<span style={{background:"rgba(242,201,76,.15)",border:"1px solid #f2c94c66",color:"#f2c94c",borderRadius:6,padding:"2px 9px",fontSize:12,fontWeight:700,wordBreak:"keep-all"}}>🏢 {order.bulk_vendor}</span>}
         {statusChip}
         {isDone&&order.completed_by&&<span style={{background:"rgba(76,175,80,.15)",border:"1px solid #4caf5044",color:"#a8d8a0",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:600}}>👤 {order.completed_by}</span>}
         {isDone&&!order.erp_done&&<span style={{background:"rgba(220,120,40,.2)",border:"1px solid #d0803055",color:"#f0b070",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:700}}>⚠ ERP 미입력</span>}
-        {editing&&order.status==="대기"?(
+        {editing&&canEditMain?(
           <>
             <input type="number" value={qty} onChange={e=>setQty(e.target.value)} style={{...inpS,width:70}}/>
             <span style={{color:"#aaa",fontSize:12}}>개</span>
             <select value={editChId} onChange={e=>setEditChId(e.target.value)} style={{...inpS,cursor:"pointer"}}>
               {activeChannels.map(c=><option key={c.id} value={String(c.id)}>{c.name}</option>)}
             </select>
-            {isBulkCh(channels.find(c=>String(c.id)===String(editChId))?.name)&&(
-              <input type="text" value={editVendor} onChange={e=>setEditVendor(e.target.value)} placeholder="납품 업체명" style={{...inpS,width:130,border:"1px solid #f2c94c88"}}/>
-            )}
             <select value={editLine} onChange={e=>setEditLine(e.target.value)} style={{...inpS,cursor:"pointer",width:90}}>
               <option value="A">🟢 A라인</option>
               <option value="B">🔵 B라인</option>
             </select>
-            <button onClick={saveEdit} style={{...primaryBtn,fontSize:12,padding:"4px 12px"}}>저장</button>
-            <button onClick={()=>setEditing(false)} style={{...delBtn,fontSize:12,padding:"4px 10px"}}>취소</button>
           </>
         ):(
           <span style={{color:"#e0c090"}}>{order.qty}개</span>
         )}
         <div style={{marginLeft:"auto",display:"flex",gap:8,flexWrap:"wrap"}}>
-          {order.status==="대기"&&!editing&&<button onClick={startEdit} style={{background:"rgba(200,130,26,.2)",border:"1px solid #c8821a55",color:"#c8a06a",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✏️ 수정</button>}
+          {!editing&&<button onClick={startEdit} style={{background:"rgba(200,130,26,.2)",border:"1px solid #c8821a55",color:"#c8a06a",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{canEditMain?"✏️ 수정":"✏️ 출고정보"}</button>}
           {order.status==="대기"&&!editing&&<button onClick={()=>invest(order.id)} style={{...primaryBtn,fontSize:13,padding:"5px 14px"}}>낱개 투입</button>}
           {order.status==="투입완료"&&!editing&&<button onClick={()=>confirmOrder(order.id)} style={{background:"linear-gradient(135deg,#7a6020,#b08a30)",border:"1px solid #c8a06a66",color:"#f5e8a0",borderRadius:6,padding:"5px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>📋 생산확정</button>}
           {order.status==="투입완료"&&!editing&&<button onClick={()=>revertOrder(order.id)} style={{background:"rgba(90,130,200,.2)",border:"1px solid #5a8fc055",color:"#8ac8d8",borderRadius:6,padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>↩ 투입회수</button>}
@@ -946,6 +990,40 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
           {isPlan&&!editing&&<button onClick={()=>delOrder(order.id)} style={delBtn}>✕</button>}
         </div>
       </div>
+      {/* 출고정보 표시 (수정 중이 아닐 때) */}
+      {!editing&&(order.ship_date||order.ship_type||order.ship_note)&&(
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginTop:8,padding:"6px 10px",background:"rgba(242,201,76,.06)",border:"1px dashed #f2c94c44",borderRadius:8,fontSize:12}}>
+          {order.ship_date&&<span style={{color:"#f5c97a",fontWeight:700}}>📅 출고일 {fmtShipDate(order.ship_date)}</span>}
+          {order.ship_type&&<span style={{background:"rgba(90,140,200,.2)",border:"1px solid #5a8fc055",color:"#8ac8f0",borderRadius:6,padding:"1px 8px",fontWeight:700}}>🚚 {order.ship_type}</span>}
+          {order.ship_note&&<span style={{color:"#e8dcc0",wordBreak:"keep-all"}}>📝 {order.ship_note}</span>}
+        </div>
+      )}
+      {/* 수정 모드: 출고정보 입력 (업체 설정에서 사용으로 켠 항목만) */}
+      {editing&&(
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end",marginTop:10,padding:"10px 12px",background:"rgba(200,130,26,.08)",border:"1px solid #c8821a44",borderRadius:8}}>
+          {editFlags.vendor&&(
+            <div><div style={{fontSize:11,color:"#f2c94c",marginBottom:3}}>🏢 납품 업체명 *</div>
+              <input type="text" value={editVendor} onChange={e=>setEditVendor(e.target.value)} placeholder="납품 업체명" style={{...inpS,width:150,border:"1px solid #f2c94c88"}}/></div>
+          )}
+          {editFlags.date&&(
+            <div><div style={{fontSize:11,color:"#c8a06a",marginBottom:3}}>📅 출고일</div>
+              <input type="date" value={editShip.date} onChange={e=>setEditShip(s=>({...s,date:e.target.value}))} style={{...inpS,width:150}}/></div>
+          )}
+          {editFlags.type&&(
+            <div><div style={{fontSize:11,color:"#c8a06a",marginBottom:3}}>🚚 배송구분</div>
+              <ShipTypeSelect value={editShip.type} onChange={v=>setEditShip(s=>({...s,type:v}))} types={shipTypeNames} style={{...inpS,width:130}}/></div>
+          )}
+          {editFlags.note&&(
+            <div style={{flex:"1 1 200px"}}><div style={{fontSize:11,color:"#c8a06a",marginBottom:3}}>📝 비고</div>
+              <input type="text" value={editShip.note} onChange={e=>setEditShip(s=>({...s,note:e.target.value}))} placeholder="비고" style={{...inpS,width:"100%",boxSizing:"border-box"}}/></div>
+          )}
+          {!editFlags.vendor&&!editFlags.date&&!editFlags.type&&!editFlags.note&&<span style={{fontSize:12,color:"#8a9a88"}}>이 업체는 출고 추가정보를 사용하지 않아요. (설정 → 출고 업체 관리)</span>}
+          <div style={{display:"flex",gap:6,marginLeft:"auto"}}>
+            <button onClick={saveEdit} style={{...primaryBtn,fontSize:12,padding:"5px 14px"}}>저장</button>
+            <button onClick={()=>setEditing(false)} style={{...delBtn,fontSize:12,padding:"5px 10px"}}>취소</button>
+          </div>
+        </div>
+      )}
       {(order.status==="완료"||order.status==="투입완료"||order.status==="확정")&&order.detail&&(
         <div style={{marginTop:10,background:"rgba(0,0,0,.2)",borderRadius:8,padding:"12px 14px",fontSize:13}}>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12,padding:"8px 12px",background:"rgba(76,175,80,.12)",borderRadius:8,border:"1px solid #4caf5033",flexWrap:"wrap"}}>
@@ -1217,6 +1295,11 @@ function App(){
     setSMaster(prev=>prev.map(s=>s.code===code?{...s,color:color||""}:s));
   };
 
+  const[shipTypes,setShipTypes]=useState(null); // null = 테이블 없음/조회 실패 → 기본값 사용
+  const[newShipType,setNewShipType]=useState("");
+  const[editShipTypeId,setEditShipTypeId]=useState(null);
+  const[editShipTypeName,setEditShipTypeName]=useState("");
+  const shipTypeNames=shipTypes&&shipTypes.length?shipTypes.map(t=>t.name):DEFAULT_SHIP_TYPES;
   const[stockForm,setStockForm]=useState({sCode:"",expiry:"",qty:"",isPending:false});
   const[stockFilter,setStockFilter]=useState("ALL");
   // 완제품생산 좌측 낱개재고 사이드바 접기/펼치기 (브라우저에 상태 기억)
@@ -1229,7 +1312,7 @@ function App(){
   const[todayDraft,setTodayDraft]=useState({workers:"",hours:8,overtime:0});
   const[todayEditing,setTodayEditing]=useState(false);
   const[todaySaving,setTodaySaving]=useState(false);
-  const[orderForm,setOrderForm]=useState({pCode:"",qty:"",channelId:"",line:"A",bulkVendor:""});
+  const[orderForm,setOrderForm]=useState({pCode:"",qty:"",channelId:"",line:"A",bulkVendor:"",shipDate:"",shipType:"",shipNote:""});
   // planDate: 동적 기본값 (항상 today 기준)
   const[planInfo,setPlanInfo]=useState(()=>{try{const s=localStorage.getItem("planInfo");return s?JSON.parse(s):{planDate:today()};}catch{return{planDate:today()};}});
   const[showPlanSetting,setShowPlanSetting]=useState(false);
@@ -1364,7 +1447,7 @@ function App(){
 
   const loadAll=async()=>{
     setLoading(true);
-    await Promise.all([loadMasters(),loadBom(),loadStock(),loadOrders(),loadChannels()]);
+    await Promise.all([loadMasters(),loadBom(),loadStock(),loadOrders(),loadChannels(),loadShipTypes()]);
     // 초기 탭이 생산로그면 자동 로드
     if(tab==="생산로그")loadLog();
     setLoading(false);
@@ -1448,6 +1531,12 @@ function App(){
     if(error)return alert("저장 오류: "+error.message);
     setTodayNote(payload);setTodayEditing(false);
     setAnaNoteMap(prev=>prev[d]?{...prev,[d]:{note:payload.note||"",workers,hours,overtime}}:prev);
+  };
+  // 배송구분 목록 (설정에서 관리)
+  const loadShipTypes=async()=>{
+    const{data,error}=await sb.from("drip2_ship_types").select("*").order("sort_order").order("id");
+    if(error){console.warn("배송구분 목록 조회 실패 → 기본값 사용:",error.message);setShipTypes(null);return;}
+    setShipTypes(data||[]);
   };
   const loadChannels=async()=>{const{data}=await sb.from("drip2_channels").select("*").order("sort_order").order("name");if(data)setChannels(data);};
 
@@ -1756,11 +1845,11 @@ function App(){
   // 완제품 엑셀 양식 다운로드
   const downloadProdExcel=()=>{
     const rows=[
-      ["출고업체","생산날짜(YYYYMMDD)","완제품코드","완제품명(참고)","생산수량"],
-      ...pMaster.slice(0,3).map((p,i)=>["온라인",today().replace(/-/g,""),p.code,p.name,0])
+      ["출고업체","생산날짜(YYYYMMDD)","완제품코드","완제품명(참고)","생산수량","출고일(YYYYMMDD)","배송구분","비고","납품업체명"],
+      ...pMaster.slice(0,3).map((p,i)=>["온라인",today().replace(/-/g,""),p.code,p.name,0,"","","",""])
     ];
     const ws=XLSX.utils.aoa_to_sheet(rows);
-    ws["!cols"]=[{wch:14},{wch:20},{wch:14},{wch:30},{wch:10}];
+    ws["!cols"]=[{wch:14},{wch:20},{wch:14},{wch:30},{wch:10},{wch:18},{wch:12},{wch:30},{wch:18}];
     // 헤더 설명 추가
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,"완제품주문");
@@ -1772,6 +1861,11 @@ function App(){
       ["C열 완제품코드","product_master의 코드","DRB0069"],
       ["D열 완제품명","참고용 (무시됨)","드립백 명절선물세트"],
       ["E열 생산수량","숫자만 입력","100"],
+      ["F열 출고일 (선택)","YYYYMMDD 8자리 숫자만","20261022"],
+      ["G열 배송구분 (선택)","설정의 배송구분 목록 중 입력",shipTypeNames.join(" / ")],
+      ["H열 비고 (선택)","자유 입력","오전 출고"],
+      ["I열 납품업체명","납품업체명 사용 업체(예: 대량납품)는 필수","○○상사"],
+      ["※ 참고","설정에서 해당 업체가 '미사용'으로 둔 항목은 입력해도 저장되지 않아요",""],
     ];
     const ws2=XLSX.utils.aoa_to_sheet(guide);
     ws2["!cols"]=[{wch:16},{wch:35},{wch:25}];
@@ -1783,11 +1877,11 @@ function App(){
     try{
       const buf=await file.arrayBuffer();const wb=XLSX.read(buf);
       const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:""});
-      const toInsert=[],skipped=[],dateErrors=[];
+      const toInsert=[],skipped=[],dateErrors=[],vendorErrors=[];
       const nextPBase=await getNextPriority();
       let offset=0;
       for(let i=1;i<rows.length;i++){
-        const[rawCo,rawDate,rawCode,,rawQty]=rows[i];
+        const[rawCo,rawDate,rawCode,,rawQty,rawShipDate,rawShipType,rawShipNote,rawVendor]=rows[i];
         const pCode=String(rawCode||"").trim();const qty=parseInt(rawQty);
         if(!pCode)continue;
         if(!pMaster.find(p=>p.code===pCode)){skipped.push(pCode);continue;}
@@ -1801,10 +1895,23 @@ function App(){
           if(rawStr&&!pd){dateErrors.push("행"+(i+1)+": '"+rawDate+"' (유효하지 않은 날짜)");continue;}
           if(pd)planDateStr=pd.toISOString().slice(0,10);
         }
-        toInsert.push({p_code:pCode,channel:String(rawCo||"").trim()||"미입력",qty,priority:nextPBase+offset,status:"대기",plan_date:planDateStr,line:"A"});
+        // 출고일 (선택) — YYYYMMDD
+        let shipDateStr=null;
+        const rawShipStr=String(rawShipDate||"").replace(/-/g,"").trim();
+        if(rawShipStr){
+          const sd=validateYMD8(rawShipStr);
+          if(!sd){dateErrors.push("행"+(i+1)+": 출고일 '"+rawShipDate+"' (YYYYMMDD 형식 오류)");continue;}
+          shipDateStr=sd.toISOString().slice(0,10);
+        }
+        const chName=String(rawCo||"").trim()||"미입력";
+        const chObj=channels.find(c=>c.name===chName);
+        if(chFlags(chObj||{name:chName}).vendor&&!String(rawVendor||"").trim()){vendorErrors.push("행"+(i+1)+": "+chName+" — 납품업체명(I열) 필요");continue;}
+        const ship=buildShipFields(chObj||{name:chName},{vendor:String(rawVendor||""),date:shipDateStr,type:String(rawShipType||""),note:String(rawShipNote||"")});
+        toInsert.push({p_code:pCode,channel:chName,qty,priority:nextPBase+offset,status:"대기",plan_date:planDateStr,line:"A",...ship});
         offset++;
       }
       if(dateErrors.length){alert("❌ 날짜 형식 오류 (YYYYMMDD 8자리 숫자만 허용)\n\n"+dateErrors.join("\n")+"\n\n업로드를 중단합니다.");e.target.value="";return;}
+      if(vendorErrors.length){alert("❌ 납품업체명 누락\n\n"+vendorErrors.join("\n")+"\n\n업로드를 중단합니다.");e.target.value="";return;}
       if(!toInsert.length)return alert("업로드 데이터 없음\n미매칭: "+(skipped.join(", ")||"없음"));
       const{data,error}=await sb.from("drip2_orders").insert(toInsert).select();
       if(error)return alert("업로드 오류: "+error.message);
@@ -1823,18 +1930,19 @@ function App(){
     if(!pCode||!qty||parseInt(qty)<=0){orderSubmitting.current=false;return alert("수량을 입력해주세요.");}
     const ch=channels.find(c=>String(c.id)===String(channelId));
     const channelName=ch?.name||"미설정";
-    const bulkVendor=isBulkCh(channelName)?(orderForm.bulkVendor||"").trim():"";
-    if(isBulkCh(channelName)&&!bulkVendor){orderSubmitting.current=false;return alert("대량납품 업체명을 입력해주세요.");}
+    const flags=chFlags(ch);
+    if(flags.vendor&&!(orderForm.bulkVendor||"").trim()){orderSubmitting.current=false;return alert("납품 업체명을 입력해주세요.");}
+    const ship=buildShipFields(ch,{vendor:orderForm.bulkVendor,date:orderForm.shipDate,type:orderForm.shipType,note:orderForm.shipNote});
     const nextP=await getNextPriority();
+    const row={p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,line:orderForm.line||"A",...ship};
     // ★ UI 즉시 반영
     const tempId="temp_"+Date.now();
-    const tempOrder={id:tempId,p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,line:orderForm.line||"A",bulk_vendor:bulkVendor||null};
-    setOrders(prev=>[...prev,tempOrder]);
-    setOrderForm(f=>({...f,qty:""}));
+    setOrders(prev=>[...prev,{id:tempId,...row}]);
+    setOrderForm(f=>({...f,qty:"",shipNote:""})); // 출고일·배송구분·납품업체명은 연속 입력 편의를 위해 유지
     // ★ 잠금 즉시 해제 (빠른 연속 입력 가능)
     orderSubmitting.current=false;
     // ★ DB 저장 백그라운드
-    const{data,error}=await sb.from("drip2_orders").insert({p_code:pCode,channel:channelName,qty:parseInt(qty),priority:nextP,status:"대기",plan_date:viewDate||null,line:orderForm.line||"A",bulk_vendor:bulkVendor||null}).select().single();
+    const{data,error}=await sb.from("drip2_orders").insert(row).select().single();
     if(error){
       setOrders(prev=>prev.filter(o=>o.id!==tempId));
       alert("저장 오류: "+error.message);return;
@@ -1934,11 +2042,12 @@ function App(){
       });
     }
   };
-  const updateOrder=async(id,qty,channel,line,bulkVendor)=>{
-    const upd={qty,channel,line:line||"A",bulk_vendor:isBulkCh(channel)?(bulkVendor||null):null};
-    const{error}=await sb.from("drip2_orders").update(upd).eq("id",id);
-    if(error)return alert("수정 오류: "+error.message);
-    setOrders(prev=>prev.map(o=>o.id===id?{...o,...upd}:o));
+  // 주문 수정 — patch에 담긴 항목만 저장 (수량/업체/라인/출고정보)
+  const updateOrder=async(id,patch)=>{
+    const{error}=await sb.from("drip2_orders").update(patch).eq("id",id);
+    if(error){alert("수정 오류: "+error.message);return false;}
+    setOrders(prev=>prev.map(o=>o.id===id?{...o,...patch}:o));
+    return true;
   };
 
   // 생산취소: 완료 상태에서 완전 취소 (재고복구 + 로그삭제 + 주문삭제)
@@ -2277,7 +2386,8 @@ function App(){
   const addChannel=async()=>{
     if(!newChannel.name.trim())return alert("업체명을 입력하세요.");
     const maxOrder=channels.length>0?Math.max(...channels.map(c=>c.sort_order||0))+1:0;
-    const{data,error}=await sb.from("drip2_channels").insert({name:newChannel.name.trim(),color:newChannel.color,color2:newChannel.color2||null,active:true,sort_order:maxOrder}).select().single();
+    const nm=newChannel.name.trim();
+    const{data,error}=await sb.from("drip2_channels").insert({name:nm,color:newChannel.color,color2:newChannel.color2||null,active:true,sort_order:maxOrder,use_ship_date:true,use_ship_type:true,use_note:true,use_vendor:isBulkCh(nm)}).select().single();
     if(error)return alert("오류: "+error.message);
     if(data)setChannels(prev=>[...prev,data]); // 맨 뒤에 추가, 이름순 재정렬 없음
     setNewChannel({name:"",color:COLORS[0],color2:"",active:true});
@@ -2291,6 +2401,45 @@ function App(){
     setEditChId(null);
   };
   const toggleChActive=async(id,active)=>{await sb.from("drip2_channels").update({active}).eq("id",id);setChannels(prev=>prev.map(c=>c.id===id?{...c,active}:c));};
+  // ── 배송구분 관리 ──
+  const shipTypeTableErr=()=>alert("배송구분 테이블(drip2_ship_types)이 없어요.\nSupabase SQL Editor에서 최초 1회 SQL을 실행해주세요.");
+  const addShipType=async()=>{
+    const nm=newShipType.trim();
+    if(!nm)return alert("배송구분 이름을 입력하세요.");
+    if(shipTypes===null)return shipTypeTableErr();
+    if(shipTypes.some(t=>t.name===nm))return alert("이미 있는 배송구분이에요.");
+    const maxOrder=shipTypes.length?Math.max(...shipTypes.map(t=>t.sort_order||0))+1:0;
+    const{data,error}=await sb.from("drip2_ship_types").insert({name:nm,sort_order:maxOrder}).select().single();
+    if(error)return alert("추가 오류: "+error.message);
+    setShipTypes(prev=>[...(prev||[]),data]);setNewShipType("");
+  };
+  const saveShipTypeName=async(id)=>{
+    const nm=editShipTypeName.trim();
+    if(!nm)return alert("이름을 입력하세요.");
+    if(shipTypes.some(t=>t.id!==id&&t.name===nm))return alert("이미 있는 배송구분이에요.");
+    const{error}=await sb.from("drip2_ship_types").update({name:nm}).eq("id",id);
+    if(error)return alert("수정 오류: "+error.message);
+    setShipTypes(prev=>prev.map(t=>t.id===id?{...t,name:nm}:t));setEditShipTypeId(null);
+  };
+  const delShipType=t=>askPw("배송구분 삭제","["+t.name+"] 목록에서 삭제됩니다. (이미 등록된 주문의 값은 그대로 남아요)",async()=>{
+    const{error}=await sb.from("drip2_ship_types").delete().eq("id",t.id);
+    if(error)return alert("삭제 오류: "+error.message);
+    setShipTypes(prev=>prev.filter(x=>x.id!==t.id));
+  });
+  const moveShipType=async(id,dir)=>{
+    const list=[...shipTypes];const i=list.findIndex(t=>t.id===id);const j=i+dir;
+    if(i<0||j<0||j>=list.length)return;
+    [list[i],list[j]]=[list[j],list[i]];
+    const re=list.map((t,k)=>({...t,sort_order:k}));
+    setShipTypes(re);
+    await Promise.all(re.map(t=>sb.from("drip2_ship_types").update({sort_order:t.sort_order}).eq("id",t.id)));
+  };
+  // 업체별 출고정보 항목(출고일/배송구분/비고/납품업체명) 사용 여부 변경
+  const toggleChFlag=async(id,col,val)=>{
+    const{error}=await sb.from("drip2_channels").update({[col]:val}).eq("id",id);
+    if(error)return alert("설정 저장 오류: "+error.message+"\n\n(최초 1회 SQL 실행이 필요할 수 있어요)");
+    setChannels(prev=>prev.map(c=>c.id===id?{...c,[col]:val}:c));
+  };
 
   // ── 비밀번호 변경 (13번) ──
   const changePw=async()=>{
@@ -2331,13 +2480,15 @@ function App(){
   const printPlan=(filterDate)=>{
     const pending=viewOrders.filter(o=>o.status==="대기"||o.status==="투입완료");
     if(!pending.length){alert("출력할 주문이 없습니다.");return;}
+    // 인쇄용 HTML 이스케이프 (비고/업체명에 <, & 등이 들어가도 안전하게)
+    const esc=v=>String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
     const rows=pending.map(o=>{
       const lotStr=o.detail?.lot?"LOT "+o.detail.lot:"(투입 전)";
       const finExpStr=o.detail?.finExp?fmtDate(o.detail.finExp):"-";
       const ch=channels.find(c=>c.name===o.channel);
       const chColor=ch?.color||"#5a6a5a";
       const chColor2=ch?.color2||null;
-      const companyDisplay=chDisplay(o);
+      const companyName=o.channel||"-";
       const lineLabel=o.line==="B"?"🔵 B라인":"🟢 A라인";
       const lineColor=o.line==="B"?"#1a5fa8":"#2a7a2a";
       const lineBadge="<span style='display:inline-block;background:"+lineColor+";color:#fff;border:3px solid rgba(255,255,255,.8);border-radius:8px;padding:6px 16px;font-weight:900;font-size:15px;-webkit-print-color-adjust:exact;print-color-adjust:exact;letter-spacing:.5px;margin-right:8px;'>"+lineLabel+"</span>";
@@ -2347,10 +2498,30 @@ function App(){
       const badgeBg=chColor2
         ?"linear-gradient(90deg,"+chColor+" 50%,"+chColor2+" 50%)"
         :chColor;
-      const chBadge="<span style='display:inline-block;background:"+badgeBg+";color:#fff;border:3px solid rgba(255,255,255,.8);border-radius:8px;padding:6px 22px;font-weight:700;font-size:17px;-webkit-print-color-adjust:exact;print-color-adjust:exact;text-shadow:0 1px 3px rgba(0,0,0,.6);letter-spacing:.5px;'>"+companyDisplay+"</span>";
+      // 업체 뱃지 — 이름이 길면 줄바꿈 (단어 단위), 최대 폭 제한
+      const chBadge="<span style='display:inline-block;max-width:100%;background:"+badgeBg+";color:#fff;border:3px solid rgba(255,255,255,.8);border-radius:8px;padding:6px 18px;font-weight:800;font-size:17px;line-height:1.3;white-space:normal;word-break:keep-all;overflow-wrap:anywhere;-webkit-print-color-adjust:exact;print-color-adjust:exact;text-shadow:0 1px 3px rgba(0,0,0,.6);letter-spacing:.3px;'>"+esc(companyName)+"</span>";
+      // 납품업체명 — 흰 바탕 검정 글씨로 크게 (색상 뱃지보다 인쇄 시 잘 보임)
+      const vendorBox=o.bulk_vendor
+        ?"<div style='margin-top:8px;padding:8px 14px;background:#fff;border:2px solid #222;border-radius:6px;display:flex;align-items:baseline;gap:10px;'>"
+          +"<span style='font-size:12px;font-weight:700;color:#555;white-space:nowrap;'>🏢 납품처</span>"
+          +"<span style='font-size:20px;font-weight:900;color:#111;line-height:1.3;word-break:keep-all;overflow-wrap:anywhere;'>"+esc(o.bulk_vendor)+"</span></div>"
+        :"";
+      // 출고정보 (출고일/배송구분/비고) — 값이 있는 것만 표로
+      const shipCells=[
+        o.ship_date?["📅 출고일",esc(fmtShipDate(o.ship_date))]:null,
+        o.ship_type?["🚚 배송구분",esc(o.ship_type)]:null,
+        o.ship_note?["📝 비고",esc(o.ship_note)]:null,
+      ].filter(Boolean);
+      const shipBox=shipCells.length
+        ?"<table style='width:100%;border-collapse:collapse;margin-top:8px;font-size:14px;table-layout:auto;'><tr>"
+          +shipCells.map(([l,v],i)=>"<th style='padding:6px 10px;border:1px solid #999;background:#fff4d6;white-space:nowrap;font-size:12px;width:1%;'>"+l+"</th><td style='padding:6px 10px;border:1px solid #999;font-weight:700;word-break:keep-all;overflow-wrap:anywhere;"+(l.includes("비고")?"":"white-space:nowrap;")+"'>"+v+"</td>").join("")
+          +"</tr></table>"
+        :"";
       return "<div style='border:2px solid #ccc;border-radius:8px;padding:14px 18px;margin-bottom:16px;page-break-inside:avoid;'>"
-        +"<div style='display:flex;align-items:center;gap:12px;background:#f5f5f5;border-radius:6px;padding:10px 14px;margin-bottom:10px;border:1px solid #ddd;'>"+lineBadge+chBadge
-        +"<span style='background:#5a7a3a;color:#fff;border-radius:5px;padding:4px 12px;font-weight:700;font-size:14px;'>📅 "+(o.plan_date||"-")+"</span>"
+        +"<div style='background:#f5f5f5;border-radius:6px;padding:10px 14px;margin-bottom:10px;border:1px solid #ddd;'>"
+        +"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap;'>"+lineBadge+chBadge
+        +"<span style='background:#5a7a3a;color:#fff;border-radius:5px;padding:4px 12px;font-weight:700;font-size:14px;white-space:nowrap;'>📅 생산 "+(o.plan_date||"-")+"</span>"
+        +"</div>"+vendorBox+shipBox
         +"</div>"
         +"<div style='display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;'>"
         +"<span style='background:#5a7a4a;color:#fff;border-radius:5px;padding:2px 8px;font-weight:700;font-size:12px;'>P"+o.priority+"</span>"
@@ -2487,7 +2658,7 @@ function App(){
   // ══ 분석2: 요일별 생산량 + 업체별 낱개 (요일별) ══
   const A2_WD=[1,2,3,4,5,6,0]; // 월~일 순서
   const a2UnitsOf=code=>bomOf(code).reduce((a,c)=>a+(c.qty||0),0);
-  const a2Key=r=>(a2SplitBulk&&isBulkCh(r.channel)&&r.bulk_vendor)?BULK_CH+" · "+r.bulk_vendor:(r.channel||"미입력");
+  const a2Key=r=>(a2SplitBulk&&r.bulk_vendor)?(r.channel||"미입력")+" · "+r.bulk_vendor:(r.channel||"미입력");
   const a2Wd={};A2_WD.forEach(w=>{a2Wd[w]={days:new Set(),qty:0,unit:0,ch:{}};});
   const a2Ch={};   // {업체:{qty,unit,days:Set,wd:{w:{qty,unit}}}}
   const a2Date={}; // {날짜:{qty,unit,ch:{업체:{qty,unit}}}}
@@ -2514,7 +2685,7 @@ function App(){
   const a2ChKeys=Object.keys(a2Ch).sort((a,b)=>a2Pick(a2Ch[b])-a2Pick(a2Ch[a]));
   const a2ChColor={};
   {const used=new Set();a2ChKeys.forEach((k,i)=>{
-    const base=k.startsWith(BULK_CH+" · ")?BULK_CH:k;
+    const base=k.split(" · ")[0];
     let c=channels.find(x=>x.name===base)?.color;
     if(!c||used.has(c))c=COLORS.find(x=>!used.has(x))||COLORS[i%COLORS.length];
     used.add(c);a2ChColor[k]=c;
@@ -2882,13 +3053,6 @@ function App(){
                   </select>
                 </div>
                 {orderForm.channelId&&(()=>{const ch=channels.find(c=>String(c.id)===String(orderForm.channelId));return ch?<div style={{alignSelf:"flex-end",paddingBottom:2}}><ChannelBadge name={ch.name} color={ch.color} color2={ch.color2} size="sm"/></div>:null;})()}
-                {isBulkCh(channels.find(c=>String(c.id)===String(orderForm.channelId))?.name)&&(
-                  <div>
-                    <div style={{...lbl,color:"#f2c94c"}}>🏢 납품 업체명 *</div>
-                    <input type="text" value={orderForm.bulkVendor||""} onChange={e=>setOrderForm(f=>({...f,bulkVendor:e.target.value}))} placeholder="예) ○○상사" autoFocus
-                      style={{...inp,width:150,border:"1px solid #f2c94c88",background:"rgba(242,201,76,.1)"}}/>
-                  </div>
-                )}
                 <LblInp label="생산수량" type="number" value={orderForm.qty} onChange={v=>setOrderForm(f=>({...f,qty:v}))} placeholder="0" width={90}/>
                 {/* 라인 선택 */}
                 <div style={{alignSelf:"flex-end"}}>
@@ -2906,6 +3070,43 @@ function App(){
                 </div>
                 <button onClick={addOrder} style={{...primaryBtn,alignSelf:"flex-end"}}>주문 등록</button>
               </div>
+              {/* 출고 추가정보 — 선택한 업체에서 사용으로 설정된 항목만 표시 */}
+              {(()=>{
+                const ch=channels.find(c=>String(c.id)===String(orderForm.channelId));
+                if(!ch)return null;
+                const f=chFlags(ch);
+                if(!f.vendor&&!f.date&&!f.type&&!f.note)return null;
+                return(
+                  <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end",marginTop:12,paddingTop:12,borderTop:"1px dashed #7a8a7044"}}>
+                    <div style={{fontSize:12,color:"#c8ddb8",fontWeight:700,alignSelf:"center"}}>🚚 출고정보</div>
+                    {f.vendor&&(
+                      <div>
+                        <div style={{...lbl,color:"#f2c94c"}}>🏢 납품 업체명 *</div>
+                        <input type="text" value={orderForm.bulkVendor||""} onChange={e=>setOrderForm(x=>({...x,bulkVendor:e.target.value}))} placeholder="예) ○○상사"
+                          style={{...inp,width:160,border:"1px solid #f2c94c88",background:"rgba(242,201,76,.1)"}}/>
+                      </div>
+                    )}
+                    {f.date&&(
+                      <div>
+                        <div style={lbl}>📅 출고일</div>
+                        <input type="date" value={orderForm.shipDate||""} onChange={e=>setOrderForm(x=>({...x,shipDate:e.target.value}))} style={{...inp,width:160}}/>
+                      </div>
+                    )}
+                    {f.type&&(
+                      <div>
+                        <div style={lbl}>🚚 배송구분</div>
+                        <ShipTypeSelect value={orderForm.shipType||""} onChange={v=>setOrderForm(x=>({...x,shipType:v}))} types={shipTypeNames} style={{...inp,width:140}}/>
+                      </div>
+                    )}
+                    {f.note&&(
+                      <div style={{flex:"1 1 220px"}}>
+                        <div style={lbl}>📝 비고</div>
+                        <input type="text" value={orderForm.shipNote||""} onChange={e=>setOrderForm(x=>({...x,shipNote:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addOrder()} placeholder="예) 오전 출고 / 박스 라벨 별도" style={{...inp,width:"100%",boxSizing:"border-box"}}/>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* 다중 선택 */}
@@ -3193,7 +3394,7 @@ function App(){
                         markErpDone={markErpDone}
                         primaryBtn={primaryBtn} delBtn={delBtn}
                         moveOrder={moveOrder} isFirst={idx===0} isLast={idx===arr.length-1}
-                        channels={channels}/>
+                        channels={channels} shipTypeNames={shipTypeNames}/>
                     </div>
                   </div>
                 ))
@@ -3298,7 +3499,7 @@ function App(){
                                 markErpDone={markErpDone}
                                 primaryBtn={primaryBtn} delBtn={delBtn}
                                 moveOrder={null} isFirst={idx===0} isLast={idx===confirmedList.length-1}
-                                channels={channels}/>
+                                channels={channels} shipTypeNames={shipTypeNames}/>
                             </div>
                           </div>
                         </div>
@@ -3320,7 +3521,7 @@ function App(){
                     markErpDone={markErpDone}
                     primaryBtn={primaryBtn} delBtn={delBtn}
                     moveOrder={null} isFirst={idx===0} isLast={idx===arr.length-1}
-                    channels={channels}/>
+                    channels={channels} shipTypeNames={shipTypeNames}/>
                 ));
             })()}
           </div>
@@ -3858,7 +4059,7 @@ function App(){
               </div>
               <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",color:"#c8c8b8"}}>
                 <input type="checkbox" checked={a2SplitBulk} onChange={e=>setA2SplitBulk(e.target.checked)} style={{accentColor:"#f2c94c",width:15,height:15}}/>
-                대량납품을 납품업체별로 나눠 보기
+                납품업체명 입력 건(대량납품 등)을 납품업체별로 나눠 보기
               </label>
             </div>
 
@@ -4133,7 +4334,7 @@ function App(){
             {/* 업체 관리 */}
             <div style={{background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"20px 22px",marginBottom:24}}>
               <div style={{fontSize:15,fontWeight:700,color:"#c8ddb8",marginBottom:6}}>🏢 출고 업체 관리</div>
-              <div style={{fontSize:12,color:"#8a9a88",marginBottom:16}}>등록된 업체가 생산 주문 드롭다운에 표시됩니다.</div>
+              <div style={{fontSize:12,color:"#8a9a88",marginBottom:16,lineHeight:1.6}}>등록된 업체가 생산 주문 드롭다운에 표시됩니다.<br/>업체마다 <b style={{color:"#f2c94c"}}>입력항목(출고일·배송구분·비고·납품업체명)</b>을 눌러 ON/OFF 할 수 있어요. OFF된 항목은 주문 등록 화면에 안 나와요. (납품업체명 ON이면 필수 입력)</div>
 
               {channels.length===0&&<div style={{textAlign:"center",color:"#8a9a88",padding:16,fontSize:14}}>등록된 업체가 없습니다.</div>}
               <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:20}}>
@@ -4174,6 +4375,17 @@ function App(){
                           {ch.color2&&<div style={{width:18,height:18,borderRadius:4,background:ch.color2,border:"2px solid rgba(255,255,255,.3)"}}/>}
                         </div>
                         <span style={{fontSize:12,padding:"2px 8px",borderRadius:10,background:ch.active!==false?"rgba(76,175,80,.2)":"rgba(160,60,60,.2)",color:ch.active!==false?"#6fcf97":"#e89090",border:"1px solid "+(ch.active!==false?"#4caf5044":"#c0606044")}}>{ch.active!==false?"활성":"비활성"}</span>
+                        {/* 출고정보 입력 항목 사용/미사용 — 클릭으로 전환 */}
+                        <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+                          <span style={{fontSize:11,color:"#8a9a88"}}>입력항목:</span>
+                          {SHIP_FIELDS.map(sf=>{const on=chFlags(ch)[sf.key];return(
+                            <button key={sf.key} onClick={()=>toggleChFlag(ch.id,sf.col,!on)} title={on?"클릭하면 사용 안 함":"클릭하면 사용"}
+                              style={{fontSize:11,padding:"3px 9px",borderRadius:12,cursor:"pointer",fontFamily:"inherit",fontWeight:on?700:400,
+                                background:on?"rgba(242,201,76,.18)":"rgba(255,255,255,.04)",border:"1px solid "+(on?"#f2c94c77":"#6a6a6455"),
+                                color:on?"#f2c94c":"#6a7a68",textDecoration:on?"none":"line-through"}}>
+                              {sf.label} {on?"ON":"OFF"}
+                            </button>);})}
+                        </div>
                         <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
                           {/* 순서 이동 */}
                           <div style={{display:"flex",flexDirection:"column",gap:2}}>
@@ -4221,6 +4433,41 @@ function App(){
                   <button onClick={addChannel} style={{...primaryBtn,alignSelf:"flex-end"}}>+ 등록</button>
                 </div>
               </div>
+            </div>
+
+            {/* 배송구분 관리 */}
+            <div style={{background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"20px 22px",marginBottom:24}}>
+              <div style={{fontSize:15,fontWeight:700,color:"#c8ddb8",marginBottom:6}}>🚚 배송구분 관리</div>
+              <div style={{fontSize:12,color:"#8a9a88",marginBottom:14}}>주문 등록·수정 화면의 배송구분 선택 목록이에요. 이름을 바꾸거나 삭제해도 이미 등록된 주문의 값은 그대로 남아요.</div>
+              {shipTypes===null?(
+                <div style={{padding:"10px 14px",background:"rgba(224,80,80,.12)",border:"1px solid #e0505066",borderRadius:8,fontSize:12,color:"#f0a0a0"}}>⚠️ 배송구분 테이블이 아직 없어서 기본 목록({DEFAULT_SHIP_TYPES.join(", ")})을 쓰고 있어요. 최초 1회 SQL을 실행하면 여기서 직접 관리할 수 있어요.</div>
+              ):(<>
+                <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
+                  {shipTypes.length===0&&<div style={{fontSize:13,color:"#8a9a88"}}>등록된 배송구분이 없어요. (없으면 기본 목록이 표시돼요)</div>}
+                  {shipTypes.map((t,i)=>(
+                    <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 12px",background:"rgba(255,255,255,.05)",border:"1px solid "+(editShipTypeId===t.id?"#c8821a77":"#7a8a7044"),borderRadius:8,flexWrap:"wrap"}}>
+                      <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                        <button onClick={()=>moveShipType(t.id,-1)} disabled={i===0} style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",borderRadius:4,color:"#a8b8a0",padding:"0 7px",fontSize:11,cursor:i===0?"default":"pointer",opacity:i===0?.3:1,fontFamily:"inherit"}}>▲</button>
+                        <button onClick={()=>moveShipType(t.id,1)} disabled={i===shipTypes.length-1} style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",borderRadius:4,color:"#a8b8a0",padding:"0 7px",fontSize:11,cursor:i===shipTypes.length-1?"default":"pointer",opacity:i===shipTypes.length-1?.3:1,fontFamily:"inherit"}}>▼</button>
+                      </div>
+                      <span style={{color:"#8a9a88",fontSize:12,width:18,textAlign:"center"}}>{i+1}</span>
+                      {editShipTypeId===t.id?(<>
+                        <input autoFocus value={editShipTypeName} onChange={e=>setEditShipTypeName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveShipTypeName(t.id);if(e.key==="Escape")setEditShipTypeId(null);}} style={{...inp,width:160}}/>
+                        <button onClick={()=>saveShipTypeName(t.id)} style={{...primaryBtn,fontSize:12,padding:"4px 12px"}}>저장</button>
+                        <button onClick={()=>setEditShipTypeId(null)} style={{...delBtn,fontSize:12}}>취소</button>
+                      </>):(<>
+                        <span style={{flex:1,color:"#f5c97a",fontWeight:700,fontSize:14}}>🚚 {t.name}</span>
+                        <button onClick={()=>{setEditShipTypeId(t.id);setEditShipTypeName(t.name);}} style={{background:"rgba(200,130,26,.2)",border:"1px solid #c8821a44",borderRadius:6,color:"#c8a06a",padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✏️ 수정</button>
+                        <button onClick={()=>delShipType(t)} style={{...delBtn,fontSize:12}}>✕ 삭제</button>
+                      </>)}
+                    </div>
+                  ))}
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"flex-end",borderTop:"1px solid #7a8a7033",paddingTop:14}}>
+                  <LblInp label="새 배송구분" value={newShipType} onChange={setNewShipType} placeholder="예) 용차" width={160}/>
+                  <button onClick={addShipType} style={{...primaryBtn,alignSelf:"flex-end"}}>+ 추가</button>
+                </div>
+              </>)}
             </div>
 
             {/* 내 비밀번호 변경 */}
