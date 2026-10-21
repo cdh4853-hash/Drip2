@@ -29,7 +29,7 @@ select option { background: #2e2e2c; color: #f0ede8; }
 
 // ════════════════════════════════════════════
 // ★ 앱 버전 — 배포할 때마다 이 값만 바꾸면, 켜져 있는 모든 화면(전광판 등)이 10분 안에 자동 새로고침됨
-const APP_VERSION="2026-10-20-2";
+const APP_VERSION="2026-10-21-21";
 // 대량납품 업체 판별 (DB에 use_vendor 설정이 없을 때의 기본값 판단용)
 const BULK_CH="대량납품";
 const isBulkCh=name=>(name||"").trim()===BULK_CH;
@@ -131,6 +131,23 @@ function validateYMD8(raw){
   if(!/^\d{8}$/.test(s))return null;
   const d=new Date(s.slice(0,4)+"-"+s.slice(4,6)+"-"+s.slice(6,8));
   return isNaN(d)?null:d;
+}
+
+// 엑셀 날짜칸 → "YYYY-MM-DD" (20261021 / 2026-10-21 / 2026.10.21 / 엑셀 날짜서식(일련번호) 모두 허용)
+function parseExcelYMD(raw){
+  if(raw==null||raw==="")return null;
+  if(typeof raw==="number"&&raw>20000&&raw<80000){ // 엑셀 일련번호
+    const d=new Date(Math.round((raw-25569)*86400000));
+    return isNaN(d)?null:d.toISOString().slice(0,10);
+  }
+  if(raw instanceof Date&&!isNaN(raw))return new Date(raw.getTime()+9*3600000).toISOString().slice(0,10);
+  const s=String(raw).trim().replace(/[.\/]/g,"-").replace(/\s/g,"");
+  let y,m,d;
+  if(/^\d{8}$/.test(s)){y=s.slice(0,4);m=s.slice(4,6);d=s.slice(6,8);}
+  else{const mm=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})-?$/);if(!mm)return null;[,y,m,d]=mm;}
+  const out=y+"-"+String(m).padStart(2,"0")+"-"+String(d).padStart(2,"0");
+  const chk=new Date(out+"T00:00:00Z");
+  return isNaN(chk)||chk.toISOString().slice(0,10)!==out?null:out;
 }
 
 // ── 재고 차감 ──
@@ -1181,6 +1198,15 @@ function MultiTrendSvgChart({data,series,unit="",height=190}){
 }
 // 세로 누적 막대 차트 — data:[{label,sub,segs:[{key,name,value,color}]}]
 function StackedBarChart({data,unit="개",height=220}){
+  // 가로 스크롤이 생기면 기본으로 맨 오른쪽(최근 날짜)을 보여줌 — 데이터 개수나 마지막 항목이 바뀔 때만 다시 이동
+  const scrollRef=useRef(null);
+  const lastLabel=data.length?data[data.length-1].label:"";
+  useEffect(()=>{
+    const el=scrollRef.current;if(!el)return;
+    const go=()=>{el.scrollLeft=el.scrollWidth;};
+    go();const id=requestAnimationFrame(go); // 레이아웃 확정 후 한 번 더
+    return()=>cancelAnimationFrame(id);
+  },[data.length,lastLabel]);
   if(!data.length)return<div style={{color:"#8a9a88",fontSize:13,textAlign:"center",padding:20}}>데이터가 없습니다.</div>;
   const PADT=24,PADB=40,PADX=12;
   const W=Math.max(680,data.length*56),H=height;
@@ -1190,7 +1216,8 @@ function StackedBarChart({data,unit="개",height=220}){
   const bw=Math.max(14,Math.min(54,slot*0.62));
   const ch=H-PADT-PADB;
   return(
-    <div style={{width:"100%",overflowX:"auto",marginBottom:10}}>
+    <div style={{marginBottom:10}}>
+    <div ref={scrollRef} style={{width:"100%",overflowX:"auto"}}>
       <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",height:H,minWidth:Math.max(360,data.length*44)}}>
         <line x1={PADX} y1={H-PADB} x2={W-PADX} y2={H-PADB} stroke="#7a8a7044" strokeWidth="1"/>
         {data.map((d,i)=>{
@@ -1209,7 +1236,8 @@ function StackedBarChart({data,unit="개",height=220}){
           );
         })}
       </svg>
-      <div style={{fontSize:11,color:"#6a7a68"}}>💡 막대에 마우스를 올리면 업체별 수치가 보여요.</div>
+    </div>
+      <div style={{fontSize:11,color:"#6a7a68",marginTop:4}}>💡 막대에 마우스를 올리면 업체별 수치가 보여요.{data.length*44>360?" 좌우로 밀면 이전 날짜를 볼 수 있어요.":""}</div>
     </div>
   );
 }
@@ -1263,6 +1291,927 @@ function KpiCard({icon,label,value,sub,color}){
 }
 
 // ══ 메인 앱 ══════════════════════════════
+// ════════════════════════════════════════════
+// ★ 판매추이 — ERP "판매현황집계" 엑셀 업로드 → 거래처 이름 규칙으로 온라인/플랫폼/매장/대량납품 자동 분류
+//   · 분류는 저장하지 않고 화면에서 규칙으로 계산 → 규칙을 바꾸면 과거 데이터까지 바로 반영
+// ════════════════════════════════════════════
+// 기본 구분 (설정에서 추가·수정 가능 — drip2_sales_cats)
+//  split: 기본 보기에서 채널별로 열을 나눔 / merge: 채널 순위에서 한 줄로 묶고 펼쳐보기 / is_default: 규칙에 안 걸린 거래처가 들어갈 구분
+const DEFAULT_SALES_CATS=[
+  {name:"온라인",color:"#5aa9e6",description:"자사몰",split:true,merge:false,is_default:false},
+  {name:"플랫폼",color:"#b06ad0",description:"컬리·네이버·카카오 등",split:true,merge:false,is_default:false},
+  {name:"매장",color:"#f2c94c",description:"모모스 직영매장",split:false,merge:false,is_default:false},
+  {name:"대량납품",color:"#7a8a7a",description:"그 외 사업자",split:false,merge:true,is_default:true},
+];
+const SALES_CAT_PRESET_COLORS=["#5aa9e6","#b06ad0","#f2c94c","#7a8a7a","#eb5757","#6fcf97","#f2994a","#56ccf2","#e0a0c0","#a0c060","#9b8579","#c8821a"];
+// 기본 분류 규칙 (위에서부터 먼저 맞는 규칙 1개 적용)
+const DEFAULT_SALES_RULES=[
+  {keyword:"아임웹",match_type:"contains",category:"온라인",channel:"자사몰"},
+  {keyword:"스마트스토어",match_type:"contains",category:"플랫폼",channel:"네이버"},
+  {keyword:"씨제이대한통운",match_type:"contains",category:"플랫폼",channel:"네이버"},
+  {keyword:"네이버",match_type:"contains",category:"플랫폼",channel:"네이버"},
+  {keyword:"컬리",match_type:"contains",category:"플랫폼",channel:"컬리"},
+  {keyword:"카카오",match_type:"contains",category:"플랫폼",channel:"카카오"},
+  {keyword:"29cm",match_type:"contains",category:"플랫폼",channel:"29CM"},
+  {keyword:"올리브영",match_type:"contains",category:"플랫폼",channel:"올리브영"},
+  {keyword:"그린써브",match_type:"contains",category:"플랫폼",channel:"그린써브"},
+  {keyword:"영도매장",match_type:"contains",category:"매장",channel:"모모스커피 영도점"},
+  {keyword:"모모스",match_type:"contains",category:"매장",channel:""},
+];
+const SALES_MATCH_TYPES=[["contains","포함"],["starts","시작"],["exact","정확히 일치"]];
+// 비교용 정규화: 공백 제거 + 소문자 + 전각괄호 → 반각
+const salesNorm=v=>String(v||"").replace(/[（]/g,"(").replace(/[）]/g,")").replace(/\s+/g,"").toLowerCase();
+function classifyCustomer(name,rules,fallback="대량납품"){
+  const n=salesNorm(name);
+  for(const r of rules){
+    if(r.active===false)continue;
+    const k=salesNorm(r.keyword);if(!k)continue;
+    const hit=r.match_type==="exact"?n===k:r.match_type==="starts"?n.startsWith(k):n.includes(k);
+    if(hit)return{category:r.category,channel:(r.channel||"").trim()||String(name||"").trim(),rule:r};
+  }
+  return{category:fallback,channel:String(name||"").trim(),rule:null};
+}
+// 주 시작일(월요일)
+const salesWeekStart=ymd=>{const d=new Date(ymd+"T00:00:00Z");const w=(d.getUTCDay()+6)%7;d.setUTCDate(d.getUTCDate()-w);return d.toISOString().slice(0,10);};
+
+function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
+  const[view,setView]=useState("trend"); // trend | product | customer | rules | upload
+  const[rules,setRules]=useState(null);  // null=로딩 전
+  const[rulesFromDb,setRulesFromDb]=useState(false);
+  const[rulesErr,setRulesErr]=useState(false);
+  const[range,setRange]=useState(()=>({from:addDays(today(),-90),to:today()}));
+  const[draft,setDraft]=useState(()=>({from:addDays(today(),-90),to:today()}));
+  const[rows,setRows]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[dataErr,setDataErr]=useState("");
+  const[gran,setGran]=useState("week");  // day | week | month
+  const[catSel,setCatSel]=useState("__all__");
+  const[prodSel,setProdSel]=useState("");
+  const[prodCat,setProdCat]=useState("__all__");
+  const[custQ,setCustQ]=useState("");
+  const[custCat,setCustCat]=useState("__all__");
+  const[uploading,setUploading]=useState(false);
+  const[meta,setMeta]=useState(null);    // 저장된 데이터 범위
+  const[newRule,setNewRule]=useState({keyword:"",match_type:"contains",category:"플랫폼",channel:""});
+  const[editRuleId,setEditRuleId]=useState(null);
+  const[editRule,setEditRule]=useState(null);
+  const[testName,setTestName]=useState("");
+  const[rankOpen,setRankOpen]=useState({}); // 채널 순위에서 묶음 구분 펼치기 {구분명:true}
+  const[cats,setCats]=useState(()=>DEFAULT_SALES_CATS.map((c,i)=>({...c,id:"d"+i,sort_order:i})));
+  const[catsFromDb,setCatsFromDb]=useState(false);
+  const[catsErr,setCatsErr]=useState(false);
+  const[newCat,setNewCat]=useState({name:"",color:"#eb5757",description:"",split:false,merge:false});
+  const[editCatId,setEditCatId]=useState(null);
+  const[editCat,setEditCat]=useState(null);
+  const[metric,setMetric]=useState("unit"); // unit 낱개(기본) / qty 완제품
+
+  const inp={background:"rgba(255,255,255,.1)",border:"1px solid #7a8a7055",borderRadius:6,color:"#f0e6d3",padding:"6px 10px",fontSize:13,outline:"none",width:130,fontFamily:"inherit"};
+  const sel={...inp,cursor:"pointer",width:"auto"};
+  const lbl={fontSize:12,color:"#c8a06a",marginBottom:4};
+  const primaryBtn={border:"none",borderRadius:8,padding:"8px 20px",fontSize:14,cursor:"pointer",background:"linear-gradient(135deg,#5a7a4a,#7a9a6a)",color:"#fff",fontWeight:700,fontFamily:"inherit"};
+  const delBtn={background:"rgba(160,60,60,.25)",border:"1px solid #c0606044",color:"#e89090",borderRadius:6,padding:"4px 10px",fontSize:13,cursor:"pointer",fontFamily:"inherit"};
+  const chip=(on,color)=>({display:"inline-flex",alignItems:"center",gap:6,padding:"4px 12px",borderRadius:20,border:"1px solid "+(on?(color||"#6a8a5a"):"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:on?"rgba(255,255,255,.12)":"rgba(255,255,255,.04)",color:on?"#fff":"#c8c8b8",fontWeight:on?700:400});
+  const SecTitle=({icon,title,right})=>(<div style={{display:"flex",alignItems:"center",gap:8,fontSize:16,fontWeight:700,color:"#f5c97a",marginBottom:14,borderLeft:"3px solid #c8821a",paddingLeft:12}}>{icon} {title}{right&&<span style={{marginLeft:"auto"}}>{right}</span>}</div>);
+  const th={padding:"9px 12px",color:"#c8ddb8",fontWeight:600,fontSize:13,borderBottom:"1px solid #6a8a5a55",whiteSpace:"nowrap"};
+  const td={padding:"7px 12px",borderBottom:"1px solid #6a6a6444",verticalAlign:"middle"};
+  const num={...td,textAlign:"right",fontFamily:"monospace",whiteSpace:"nowrap"};
+  const fmt=v=>Math.round(v||0).toLocaleString();
+  const pct=(v,t)=>t?(v/t*100).toFixed(1):"0.0";
+  const Pct=({v,t,hi})=>(<span style={{fontSize:12,fontWeight:700,color:hi&&t&&v/t>=.3?"#ffe08a":"#a8c8c0"}}>({pct(v,t)}%)</span>);
+  // ── 구분 (DB 또는 기본값) ──
+  const CATS=[...cats].sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)).map(c=>({...c,key:c.name,desc:c.description||""}));
+  const CAT_COLOR=Object.fromEntries(CATS.map(c=>[c.key,c.color||"#888"]));
+  const CAT_BY=Object.fromEntries(CATS.map(c=>[c.key,c]));
+  const FALLBACK=(CATS.find(c=>c.is_default)||CATS[CATS.length-1]||{key:"대량납품"}).key;
+  const CatDot=({c})=>(<span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:CAT_COLOR[c]||"#888",marginRight:6,verticalAlign:"middle"}}/>);
+
+  const fetchAll=async(make)=>{
+    const PAGE=1000;let all=[],from=0;
+    for(;;){const{data,error}=await make().range(from,from+PAGE-1);if(error)return{data:null,error};all=all.concat(data||[]);if(!data||data.length<PAGE)return{data:all,error:null};from+=PAGE;}
+  };
+  const loadRules=async()=>{
+    const{data,error}=await sb.from("drip2_sales_rules").select("*").order("sort_order").order("id");
+    if(error){console.warn("판매 분류규칙 조회 실패 → 기본 규칙 사용:",error.message);setRulesErr(true);setRulesFromDb(false);setRules(DEFAULT_SALES_RULES.map((r,i)=>({...r,id:"d"+i,active:true,sort_order:i})));return;}
+    setRulesErr(false);
+    if(!data||!data.length){setRulesFromDb(false);setRules(DEFAULT_SALES_RULES.map((r,i)=>({...r,id:"d"+i,active:true,sort_order:i})));}
+    else{setRulesFromDb(true);setRules(data);}
+  };
+  const loadMeta=async()=>{
+    const[a,b]=await Promise.all([
+      sb.from("drip2_sales").select("sale_date").order("sale_date",{ascending:true}).limit(1),
+      sb.from("drip2_sales").select("sale_date,created_at").order("sale_date",{ascending:false}).limit(1),
+    ]);
+    if(a.error||b.error){setMeta(null);return;}
+    setMeta(a.data?.length?{from:a.data[0].sale_date,to:b.data[0].sale_date}:{empty:true});
+  };
+  const loadRows=async(from,to)=>{
+    setLoading(true);
+    const{data,error}=await fetchAll(()=>sb.from("drip2_sales").select("sale_date,p_code,p_name,customer,qty").gte("sale_date",from).lte("sale_date",to).order("sale_date").order("id"));
+    setLoading(false);
+    if(error){setDataErr(error.message);setRows([]);return;}
+    setDataErr("");setRows(data||[]);
+  };
+  const loadCats=async()=>{
+    const{data,error}=await sb.from("drip2_sales_cats").select("*").order("sort_order").order("id");
+    if(error){console.warn("판매 구분 조회 실패 → 기본 구분 사용:",error.message);setCatsErr(true);setCatsFromDb(false);return;}
+    setCatsErr(false);
+    if(data&&data.length){setCats(data);setCatsFromDb(true);}else setCatsFromDb(false);
+  };
+  useEffect(()=>{loadRules();loadMeta();loadCats();},[]);
+  useEffect(()=>{loadRows(range.from,range.to);},[range.from,range.to]);
+  const applyRange=(f,t)=>{if(!f||!t)return alert("기간을 선택하세요.");if(f>t)return alert("시작일이 종료일보다 늦어요.");setDraft({from:f,to:t});setRange({from:f,to:t});};
+
+  // ── 규칙 적용 (거래처명별로 1번만 계산) ──
+  const activeRules=rules||[];
+  const clsCache={};
+  const cls=name=>{
+    if(!(name in clsCache)){
+      const r=classifyCustomer(name,activeRules,FALLBACK);
+      if(!CAT_BY[r.category])r.category=FALLBACK; // 삭제된 구분을 가리키는 규칙 → 기본 구분으로
+      clsCache[name]=r;
+    }
+    return clsCache[name];
+  };
+  const pLabel=(code,name)=>pMaster.find(p=>p.code===code)?.name||name||code;
+  // 제품마스터 등록 제품만 집계 + BOM 낱개 환산
+  const masterSet=new Set(pMaster.map(p=>p.code));
+  const unitMap={};(bomData||[]).forEach(b=>{unitMap[b.p_code]=(unitMap[b.p_code]||0)+(b.qty||0);});
+  const uOf=code=>unitMap[code]||0;
+  // 판매 1개당 낱개 수: ERP 품목명의 "N개입 / N개"를 우선 (ERP 판매단위 기준)
+  //  → 예) ERP "마티에드립백 1개 [부산]"은 낱개 1개씩 판매 (생산 BOM은 200개입 박스라 BOM으로 곱하면 200배가 됨)
+  //  → 품목명에 개수가 없으면 BOM 낱개 구성수 사용
+  const nameUnits=nm=>{const t=String(nm||"");const m=t.match(/(\d+)\s*개입/)||t.match(/(\d+)\s*개(?!입)/);const n=m?parseInt(m[1]):0;return n>0?n:0;};
+  const rowUnits=r=>nameUnits(r.p_name)||uOf(r.p_code);
+  const vRows=pMaster.length?rows.filter(r=>masterSet.has(r.p_code)):rows;
+  const outRows=rows.length-vRows.length; // 예전에 올라간 마스터 외 품목 (집계 제외)
+  const noBomCodes=[...new Set(vRows.filter(r=>!rowUnits(r)).map(r=>r.p_code))];
+  // BOM과 ERP 판매단위가 다른 품목 (안내용)
+  const unitDiff=(()=>{const m={};vRows.forEach(r=>{const n=nameUnits(r.p_name),b=uOf(r.p_code);if(n&&b&&n!==b){m[r.p_code]=m[r.p_code]||{code:r.p_code,erp:n,bom:b};}});return Object.values(m);})();
+  // 완제품 수량 = 생산 단위(박스) 기준으로 환산
+  //  → ERP 판매단위와 BOM이 같으면 ERP 수량 그대로 (7개입 100개 = 100)
+  //  → 다르면 낱개 ÷ BOM (★50개입: ERP 낱개 9,500개 = 190박스 / 마티에 200개입: 18,500개 = 92.5박스)
+  const qtyOf=r=>{const n=rowUnits(r),b=uOf(r.p_code);return(n&&b&&n!==b)?(r.qty||0)*n/b:(r.qty||0);};
+  const valOf=r=>metric==="unit"?(r.qty||0)*rowUnits(r):qtyOf(r);
+  const unitWord=metric==="unit"?"낱개":"완제품";
+  // ERP에서 1개(낱개) 단위로 파는 품목(★50개입·마티에 등)은 완제품 기준에서 제외 — 낱개 기준에는 포함
+  const isSingle=r=>nameUnits(r.p_name)===1;
+  const singleCodes=[...new Set(vRows.filter(isSingle).map(r=>r.p_code))];
+  const singleUnits=vRows.filter(isSingle).reduce((a,r)=>a+(r.qty||0),0);
+  const totQtyAll=vRows.reduce((a,r)=>a+(isSingle(r)?0:qtyOf(r)),0);
+  const totUnitMulti=vRows.reduce((a,r)=>a+(isSingle(r)?0:(r.qty||0)*rowUnits(r)),0);
+  const totUnitAll=vRows.reduce((a,r)=>a+(r.qty||0)*rowUnits(r),0);
+
+  // ── 집계 ──
+  const bucketOf=d=>gran==="day"?d:gran==="week"?salesWeekStart(d):d.slice(0,7);
+  const bucketLabel=b=>{
+    if(gran==="month")return{label:b.slice(2,4)+"년 "+Number(b.slice(5,7))+"월",sub:""};
+    if(gran==="week"){const e=addDays(b,6);return{label:b.slice(5).replace("-","/"),sub:"~"+e.slice(5).replace("-","/")};}
+    return{label:b.slice(5).replace("-","/"),sub:WEEKDAY_KR[new Date(b+"T00:00:00Z").getUTCDay()]};
+  };
+  // 그룹: 온라인·플랫폼은 채널(자사몰/컬리/네이버…)별로, 매장·대량납품은 하나로
+  // 그룹: "채널별로 나눔" 구분은 채널(자사몰/컬리/네이버…)별로, 나머지는 구분 하나로
+  const grpOf=c=>CAT_BY[c.category]?.split?c.channel:c.category;
+  const grpCatOf={};
+  const tot={qty:0,cat:{},grp:{},ch:{},bucket:{},prod:{},cust:{}};
+  CATS.forEach(c=>{tot.cat[c.key]=0;});
+  vRows.forEach(r=>{
+    if(metric==="qty"&&isSingle(r))return; // 1개 단위 판매 품목은 완제품 집계에서 제외
+    const q=valOf(r);const c=cls(r.customer);const b=bucketOf(r.sale_date);
+    const g=grpOf(c);
+    tot.qty+=q;tot.cat[c.category]=(tot.cat[c.category]||0)+q;tot.grp[g]=(tot.grp[g]||0)+q;
+    if(!grpCatOf[g])grpCatOf[g]=c.category;
+    const chKey=c.category+"|"+c.channel;
+    if(!tot.ch[chKey])tot.ch[chKey]={cat:c.category,ch:c.channel,qty:0,cust:new Set()};
+    tot.ch[chKey].qty+=q;tot.ch[chKey].cust.add(r.customer);
+    if(!tot.bucket[b])tot.bucket[b]={qty:0,cat:{},grp:{},ch:{},prod:{}};
+    const B=tot.bucket[b];B.qty+=q;B.cat[c.category]=(B.cat[c.category]||0)+q;B.grp[g]=(B.grp[g]||0)+q;B.ch[chKey]=(B.ch[chKey]||0)+q;
+    B.prod[r.p_code]=B.prod[r.p_code]||{};B.prod[r.p_code][g]=(B.prod[r.p_code][g]||0)+q;
+    if(!tot.prod[r.p_code])tot.prod[r.p_code]={code:r.p_code,name:pLabel(r.p_code,r.p_name),qty:0,cat:{},grp:{}};
+    const P=tot.prod[r.p_code];P.qty+=q;P.cat[c.category]=(P.cat[c.category]||0)+q;P.grp[g]=(P.grp[g]||0)+q;
+    if(!tot.cust[r.customer])tot.cust[r.customer]={name:r.customer,qty:0,rows:0,...c};
+    tot.cust[r.customer].qty+=q;tot.cust[r.customer].rows++;
+  });
+  const buckets=Object.keys(tot.bucket).sort();
+  const catOrder=CATS.map(c=>c.key);
+  // 그룹 순서: 자사몰 → 플랫폼(판매량 순) → 매장 → 대량납품
+  const GRP_PALETTE=["#b06ad0","#6fcf97","#f2994a","#eb5757","#56ccf2","#e0a0c0","#a0c060","#c0a060","#9b8579","#bb6bd9"];
+  const grpOrder=(()=>{const ks=Object.keys(tot.grp);return catOrder.flatMap(c=>ks.filter(k=>grpCatOf[k]===c).sort((a,b)=>tot.grp[b]-tot.grp[a]));})();
+  // 색상: 나눈 구분에 채널이 1개뿐이면 구분 색, 여러 개면 팔레트 / 묶은 구분은 구분 색
+  const grpColor={};{let pi=0;grpOrder.forEach(k=>{const c=grpCatOf[k];const n=grpOrder.filter(x=>grpCatOf[x]===c).length;
+    grpColor[k]=(!CAT_BY[c]?.split||n===1)?CAT_COLOR[c]:GRP_PALETTE[pi++%GRP_PALETTE.length];});}
+  const splitNames=CATS.filter(c=>c.split).map(c=>c.key);
+  const allLabel=CATS.map(c=>c.split?c.key+"별":c.key).join(" · ");
+  // 전체 보기 모드: "__all__"=채널별로 나눈 보기 / "__cat4__"=구분 합계
+  const g4=catSel==="__cat4__";
+  const isAll=catSel==="__all__"||g4;
+  const allKeys=g4?catOrder:grpOrder;
+  const allColor=g4?CAT_COLOR:grpColor;
+  const gv=(obj,k)=>((g4?obj.cat:obj.grp)||{})[k]||0;
+  // 선택 구분 안의 채널 목록 + 색상
+  const PALETTE=["#5aa9e6","#b06ad0","#6fcf97","#f2994a","#eb5757","#56ccf2","#f2c94c","#bb6bd9","#27ae60","#9b8579","#4db6ac","#e0a0c0","#a0c060","#c0a060"];
+  const chList=Object.values(tot.ch).filter(x=>isAll||x.cat===catSel).sort((a,b)=>b.qty-a.qty);
+  const chColor={};chList.forEach((x,i)=>{chColor[x.cat+"|"+x.ch]=i<PALETTE.length?PALETTE[i]:"#6a7a6a";});
+  const TOPN=10;
+  const chTop=chList.slice(0,TOPN),chRest=chList.slice(TOPN);
+  const chartData=buckets.map(b=>{
+    const B=tot.bucket[b];
+    const segs=isAll
+      ?allKeys.map(k=>({key:k,name:k,value:gv(B,k),color:allColor[k]}))
+      :[...chTop.map(x=>{const k=x.cat+"|"+x.ch;return{key:k,name:x.ch,value:B.ch[k]||0,color:chColor[k]};}),
+        ...(chRest.length?[{key:"etc",name:"기타 "+chRest.length+"곳",value:chRest.reduce((a,x)=>a+(B.ch[x.cat+"|"+x.ch]||0),0),color:"#5a6a5a"}]:[])];
+    return{...bucketLabel(b),segs};
+  });
+  const selTotal=isAll?tot.qty:(tot.cat[catSel]||0);
+  // 채널 순위: 전체 보기에서는 "순위에서 묶기" 구분(대량납품 등)을 한 줄로 / 그 구분 상세에서는 업체별로
+  const rankList=(()=>{
+    if(!isAll)return chList;
+    const mergeCats=CATS.filter(c=>c.merge).map(c=>c.key);
+    let list=chList.filter(x=>!mergeCats.includes(x.cat));
+    mergeCats.forEach(mc=>{
+      const sub=chList.filter(x=>x.cat===mc);if(!sub.length)return;
+      const cust=new Set();sub.forEach(x=>x.cust.forEach(c=>cust.add(c)));
+      list.push({cat:mc,ch:mc+" ("+sub.length.toLocaleString()+"곳)",qty:sub.reduce((a,x)=>a+x.qty,0),cust,children:[...sub].sort((a,b)=>b.qty-a.qty),isMerged:true});
+    });
+    return list.sort((a,b)=>b.qty-a.qty);
+  })();
+
+  // ── 규칙 CRUD ──
+  const needTable=()=>{alert("분류 규칙 테이블(drip2_sales_rules)이 없어요.\nSupabase SQL Editor에서 최초 1회 SQL을 실행해주세요.");};
+  // 기본 규칙만 쓰는 중이면 먼저 DB에 저장해서 편집 가능 상태로
+  const ensureDbRules=async()=>{
+    if(rulesErr){needTable();return null;}
+    if(rulesFromDb)return rules;
+    const payload=rules.map((r,i)=>({keyword:r.keyword,match_type:r.match_type,category:r.category,channel:r.channel||null,active:r.active!==false,sort_order:i}));
+    const{data,error}=await sb.from("drip2_sales_rules").insert(payload).select();
+    if(error){alert("규칙 저장 오류: "+error.message);return null;}
+    const sorted=[...data].sort((a,b)=>a.sort_order-b.sort_order);
+    setRules(sorted);setRulesFromDb(true);return sorted;
+  };
+  const addRule=async()=>{
+    const kw=newRule.keyword.trim();if(!kw)return alert("거래처 이름에 들어갈 단어를 입력하세요.");
+    const base=await ensureDbRules();if(!base)return;
+    const maxO=base.length?Math.max(...base.map(r=>r.sort_order||0))+1:0;
+    const{data,error}=await sb.from("drip2_sales_rules").insert({keyword:kw,match_type:newRule.match_type,category:CAT_BY[newRule.category]?newRule.category:FALLBACK,channel:newRule.channel.trim()||null,active:true,sort_order:maxO}).select().single();
+    if(error)return alert("추가 오류: "+error.message);
+    setRules([...base,data]);setNewRule(r=>({...r,keyword:"",channel:""}));
+  };
+  const saveRule=async()=>{
+    const base=await ensureDbRules();if(!base)return;
+    const target=base[rules.findIndex(r=>r.id===editRuleId)];if(!target)return setEditRuleId(null);
+    const kw=(editRule.keyword||"").trim();if(!kw)return alert("단어를 입력하세요.");
+    const patch={keyword:kw,match_type:editRule.match_type,category:editRule.category,channel:(editRule.channel||"").trim()||null};
+    const{error}=await sb.from("drip2_sales_rules").update(patch).eq("id",target.id);
+    if(error)return alert("수정 오류: "+error.message);
+    setRules(base.map(r=>r.id===target.id?{...r,...patch}:r));setEditRuleId(null);
+  };
+  const toggleRule=async(idx)=>{
+    const base=await ensureDbRules();if(!base)return;
+    const r=base[idx];const v=r.active===false;
+    const{error}=await sb.from("drip2_sales_rules").update({active:v}).eq("id",r.id);
+    if(error)return alert("변경 오류: "+error.message);
+    setRules(base.map(x=>x.id===r.id?{...x,active:v}:x));
+  };
+  const moveRule=async(idx,dir)=>{
+    const base=await ensureDbRules();if(!base)return;
+    const j=idx+dir;if(j<0||j>=base.length)return;
+    const list=[...base];[list[idx],list[j]]=[list[j],list[idx]];
+    const re=list.map((r,k)=>({...r,sort_order:k}));setRules(re);
+    const res=await Promise.all([re[idx],re[j]].map(r=>sb.from("drip2_sales_rules").update({sort_order:r.sort_order}).eq("id",r.id)));
+    const err=res.find(x=>x.error);if(err)alert("순서 저장 오류: "+err.error.message);
+  };
+  const delRule=idx=>askPw("분류 규칙 삭제","["+rules[idx].keyword+"] 규칙이 삭제됩니다.",async()=>{
+    const base=await ensureDbRules();if(!base)return;
+    const r=base[idx];
+    const{error}=await sb.from("drip2_sales_rules").delete().eq("id",r.id);
+    if(error)return alert("삭제 오류: "+error.message);
+    setRules(base.filter(x=>x.id!==r.id));
+  });
+  // ── 구분 CRUD ──
+  const needCatTable=()=>alert("구분 테이블(drip2_sales_cats)이 없어요.\nSupabase SQL Editor에서 최초 1회 SQL을 실행해주세요.");
+  const catPayload=(c,i)=>({name:c.name,color:c.color||"#888888",description:c.description||null,split:!!c.split,merge:!!c.merge,is_default:!!c.is_default,sort_order:i});
+  // 기본 구분만 쓰는 중이면 먼저 DB에 저장
+  const ensureDbCats=async()=>{
+    if(catsErr){needCatTable();return null;}
+    if(catsFromDb)return CATS;
+    const{data,error}=await sb.from("drip2_sales_cats").insert(CATS.map(catPayload)).select();
+    if(error){alert("구분 저장 오류: "+error.message);return null;}
+    const sorted=[...data].sort((a,b)=>a.sort_order-b.sort_order);
+    setCats(sorted);setCatsFromDb(true);return sorted.map(c=>({...c,key:c.name}));
+  };
+  const addCat=async()=>{
+    const nm=newCat.name.trim();if(!nm)return alert("구분 이름을 입력하세요.");
+    if(CAT_BY[nm])return alert("이미 있는 구분이에요.");
+    const base=await ensureDbCats();if(!base)return;
+    const maxO=base.length?Math.max(...base.map(c=>c.sort_order||0))+1:0;
+    const{data,error}=await sb.from("drip2_sales_cats").insert({...catPayload({...newCat,name:nm,is_default:false},maxO)}).select().single();
+    if(error)return alert("추가 오류: "+error.message);
+    setCats([...base,data]);setNewCat({name:"",color:SALES_CAT_PRESET_COLORS[(base.length+1)%SALES_CAT_PRESET_COLORS.length],description:"",split:false,merge:false});
+    setNewRule(r=>({...r,category:nm})); // 바로 규칙 추가할 수 있게
+  };
+  const patchCat=async(id,patch)=>{
+    const base=await ensureDbCats();if(!base)return false;
+    const idx=CATS.findIndex(c=>c.id===id);const target=base[idx];if(!target)return false;
+    const{error}=await sb.from("drip2_sales_cats").update(patch).eq("id",target.id);
+    if(error){alert("구분 저장 오류: "+error.message);return false;}
+    setCats(base.map(c=>c.id===target.id?{...c,...patch}:c));return target;
+  };
+  const saveCat=async()=>{
+    const cur=CATS.find(c=>c.id===editCatId);if(!cur)return setEditCatId(null);
+    const nm=(editCat.name||"").trim();if(!nm)return alert("이름을 입력하세요.");
+    if(nm!==cur.key&&CAT_BY[nm])return alert("이미 있는 구분 이름이에요.");
+    // 이름이 바뀌면 그 구분을 쓰던 규칙도 같이 바꿈
+    if(nm!==cur.key){
+      const rb=await ensureDbRules();if(!rb)return;
+      const{error}=await sb.from("drip2_sales_rules").update({category:nm}).eq("category",cur.key);
+      if(error)return alert("규칙 갱신 오류: "+error.message);
+      setRules(rb.map(r=>r.category===cur.key?{...r,category:nm}:r));
+    }
+    const ok=await patchCat(cur.id,{name:nm,color:editCat.color,description:(editCat.description||"").trim()||null});
+    if(ok)setEditCatId(null);
+  };
+  const setDefaultCat=async(id)=>{
+    const base=await ensureDbCats();if(!base)return;
+    const idx=CATS.findIndex(c=>c.id===id);const target=base[idx];if(!target)return;
+    const{error:e1}=await sb.from("drip2_sales_cats").update({is_default:false}).neq("id",target.id);
+    const{error:e2}=await sb.from("drip2_sales_cats").update({is_default:true}).eq("id",target.id);
+    if(e1||e2)return alert("변경 오류: "+(e1||e2).message);
+    setCats(base.map(c=>({...c,is_default:c.id===target.id})));
+  };
+  const moveCat=async(idx,dir)=>{
+    const base=await ensureDbCats();if(!base)return;
+    const j=idx+dir;if(j<0||j>=base.length)return;
+    const list=[...base];[list[idx],list[j]]=[list[j],list[idx]];
+    const re=list.map((c,k)=>({...c,sort_order:k}));setCats(re);
+    const res=await Promise.all([re[idx],re[j]].map(c=>sb.from("drip2_sales_cats").update({sort_order:c.sort_order}).eq("id",c.id)));
+    const err=res.find(x=>x.error);if(err)alert("순서 저장 오류: "+err.error.message);
+  };
+  const delCat=c=>{
+    if(c.is_default)return alert("「규칙 없을 때」 구분은 삭제할 수 없어요. 다른 구분을 먼저 기본으로 지정해주세요.");
+    const used=(rules||[]).filter(r=>r.category===c.key);
+    if(used.length)return alert("「"+c.key+"」 구분을 쓰는 규칙이 "+used.length+"개 있어요.\n("+used.map(r=>r.keyword).slice(0,8).join(", ")+")\n\n규칙의 구분을 먼저 바꾸거나 삭제해주세요.");
+    askPw("구분 삭제","「"+c.key+"」 구분이 삭제됩니다.",async()=>{
+      const base=await ensureDbCats();if(!base)return;
+      const target=base[CATS.findIndex(x=>x.id===c.id)];if(!target)return;
+      const{error}=await sb.from("drip2_sales_cats").delete().eq("id",target.id);
+      if(error)return alert("삭제 오류: "+error.message);
+      setCats(base.filter(x=>x.id!==target.id));
+    });
+  };
+  const resetRules=()=>askPw("기본 규칙으로 초기화","지금 규칙을 모두 지우고 기본 규칙("+DEFAULT_SALES_RULES.length+"개)으로 되돌립니다.",async()=>{
+    if(rulesErr)return needTable();
+    const{error:e1}=await sb.from("drip2_sales_rules").delete().gte("id",0);
+    if(e1)return alert("초기화 오류: "+e1.message);
+    const{data,error}=await sb.from("drip2_sales_rules").insert(DEFAULT_SALES_RULES.map((r,i)=>({...r,channel:r.channel||null,active:true,sort_order:i}))).select();
+    if(error)return alert("초기화 오류: "+error.message);
+    setRules([...data].sort((a,b)=>a.sort_order-b.sort_order));setRulesFromDb(true);
+  });
+
+  // ── 엑셀 업로드 (ERP 판매현황집계) — 파일에 든 날짜 범위를 통째로 교체 ──
+  const handleUpload=async(e)=>{
+    const file=e.target.files[0];if(!file)return;
+    e.target.value="";
+    setUploading(true);
+    try{
+      const wb=XLSX.read(await file.arrayBuffer());
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+      // 헤더 행 찾기 (품목코드 / 거래처 / 일별 / 수량)
+      let h=-1,ci={};
+      for(let i=0;i<Math.min(15,aoa.length);i++){
+        const r=aoa[i].map(x=>String(x).replace(/\s/g,""));
+        const f=k=>r.findIndex(x=>x.startsWith(k));
+        if(f("품목코드")>=0&&f("거래처")>=0&&f("수량")>=0){h=i;ci={code:f("품목코드"),cust:f("거래처"),name:f("품목"),date:r.findIndex(x=>x==="일별"||x.startsWith("일자")||x.startsWith("판매일")),qty:f("수량"),amt:f("공급가액")};
+          if(ci.name===ci.code)ci.name=r.findIndex((x,j)=>j!==ci.code&&x.startsWith("품목"));break;}
+      }
+      if(h<0||ci.date<0){setUploading(false);return alert("❌ 양식을 인식하지 못했어요.\nERP '판매현황집계' 엑셀(품목코드·거래처별·품목별·일별·수량 컬럼)을 올려주세요.");}
+      const out=[],errs=[];
+      for(let i=h+1;i<aoa.length;i++){
+        const r=aoa[i];
+        const code=String(r[ci.code]||"").trim(),cust=String(r[ci.cust]||"").trim();
+        if(!code||!cust)continue;              // 소계(○○ 계)·빈 줄 건너뜀
+        if(/계\s*$/.test(code))continue;
+        const d=parseExcelYMD(r[ci.date]);
+        if(!d){errs.push("행"+(i+1)+": 날짜 '"+r[ci.date]+"'");continue;}
+        const q=Number(String(r[ci.qty]).replace(/,/g,""));
+        if(!isFinite(q)){errs.push("행"+(i+1)+": 수량 '"+r[ci.qty]+"'");continue;}
+        const amt=ci.amt>=0?Number(String(r[ci.amt]).replace(/,/g,"")):null;
+        out.push({sale_date:d,p_code:code,p_name:ci.name>=0?String(r[ci.name]||"").trim()||null:null,customer:cust,qty:Math.round(q),amount:isFinite(amt)?Math.round(amt):null});
+      }
+      if(errs.length){setUploading(false);return alert("❌ 읽을 수 없는 행이 있어 업로드를 중단했어요.\n\n"+errs.slice(0,15).join("\n")+(errs.length>15?"\n외 "+(errs.length-15)+"건":""));}
+      // ── 제품마스터 매칭 ──
+      //  1) 마스터에 있으면 그대로
+      //  2) 쇼핑백·포장 옵션 코드(끝에 A/B/C…)는 기본 코드가 마스터에 있으면 기본 코드로 합침 (DRB0071B → DRB0071)
+      //  3) 마스터에 없는 품목은 제품마스터에 자동 등록 (BOM·생산속도는 직접 설정 — 경고 표시)
+      if(!pMaster.length){setUploading(false);return alert("제품마스터를 아직 불러오지 못했어요. 잠시 후 다시 시도해주세요.");}
+      const exclList=[];const all=out.length;
+      const known=new Set(masterSet);
+      const stripSuffix=c=>c.replace(/[A-Za-z]+$/,"");
+      const isOptionName=nm=>/\[[^\]]*(쇼핑백|리본)[^\]]*\]/.test(nm||"");
+      const cleanName=nm=>String(nm||"").replace(/\s*\[[^\]]*(쇼핑백|리본)[^\]]*\]/g,"").replace(/\s{2,}/g," ").trim();
+      const fileCodes=new Set(out.map(r=>r.p_code));
+      const newReg={}; // 자동 등록할 코드 → {name,qty}
+      out.forEach(r=>{
+        if(known.has(r.p_code))return;
+        const base=stripSuffix(r.p_code);
+        if(base!==r.p_code&&known.has(base))return; // 2)에서 처리
+        // 옵션 코드면 기본 코드로 등록 (기본 코드가 파일에 있거나 이름이 쇼핑백·리본 옵션일 때), 아니면 코드 그대로
+        const target=(base!==r.p_code&&(fileCodes.has(base)||isOptionName(r.p_name)))?base:r.p_code;
+        if(!newReg[target])newReg[target]={name:"",qty:0};
+        if(r.p_code===target&&r.p_name)newReg[target].name=r.p_name;
+        else if(!newReg[target].name)newReg[target].name=cleanName(r.p_name)||target;
+      });
+      Object.keys(newReg).forEach(c=>known.add(c));
+      const mapped={};
+      out.forEach(r=>{
+        if(known.has(r.p_code)){if(newReg[r.p_code])newReg[r.p_code].qty+=r.qty;return;}
+        const base=stripSuffix(r.p_code);
+        if(base!==r.p_code&&known.has(base)){
+          if(!mapped[r.p_code])mapped[r.p_code]={to:base,qty:0};mapped[r.p_code].qty+=r.qty;
+          if(newReg[base])newReg[base].qty+=r.qty;
+          r.p_code=base;
+        }
+      });
+      const mappedList=Object.entries(mapped).sort((a,b)=>b[1].qty-a[1].qty);
+      const regList=Object.entries(newReg).sort((a,b)=>b[1].qty-a[1].qty);
+      const dates=out.map(r=>r.sale_date).sort();
+      // 파일 제목줄의 조회기간(예: 2026/08/01 ~ 2026/10/21)이 있으면 그 기간 전체를 교체 (판매 없는 날도 정확히 반영)
+      let from=dates[0],to=dates[dates.length-1];
+      const title=String((aoa[0]||[])[0]||"");
+      const tm=title.match(/(\d{4}[\/.\-]\d{1,2}[\/.\-]\d{1,2})\s*~\s*(\d{4}[\/.\-]\d{1,2}[\/.\-]\d{1,2})/);
+      if(tm){const a=parseExcelYMD(tm[1]),b=parseExcelYMD(tm[2]);if(a&&b&&a<=from&&b>=to){from=a;to=b;}}
+      const totalQty=out.reduce((a,r)=>a+r.qty,0);
+      const regMsg=regList.length?"\n\n🆕 제품마스터에 없는 품목 "+regList.length+"종을 자동 등록해요 (BOM·생산속도는 직접 설정):\n"+regList.slice(0,8).map(([c,x])=>"· "+c+" "+x.name+" ("+x.qty.toLocaleString()+"개)").join("\n")+(regList.length>8?"\n· 외 "+(regList.length-8)+"종":""):"";
+      const exclMsg=exclList.length?"\n\n⚠️ 제품마스터에 없는 품목 "+exclList.length+"종("+(all-out.length).toLocaleString()+"건)은 제외돼요:\n"+exclList.slice(0,8).map(([c,x])=>"· "+c+" "+x.name+" ("+x.qty.toLocaleString()+"개)").join("\n")+(exclList.length>8?"\n· 외 "+(exclList.length-8)+"종":"")+"\n→ 필요하면 제품마스터에 등록 후 다시 올려주세요.":"";
+      const mapMsg=mappedList.length?"\n\n🔗 옵션 코드 "+mappedList.length+"종은 기본 제품으로 합쳐요:\n"+mappedList.slice(0,6).map(([c,x])=>"· "+c+" → "+x.to+" ("+x.qty.toLocaleString()+"개)").join("\n")+(mappedList.length>6?"\n· 외 "+(mappedList.length-6)+"종":""):"";
+      const noBom=[...new Set(out.filter(r=>!rowUnits(r)).map(r=>r.p_code))];
+      // ── 기존 저장 데이터와 비교 (같은 내용이면 저장 안 함 / 지워지는 데이터가 많으면 경고) ──
+      const{data:oldRows,error:oldErr}=await fetchAll(()=>sb.from("drip2_sales").select("sale_date,p_code,customer,qty").gte("sale_date",from).lte("sale_date",to).order("id"));
+      if(oldErr){setUploading(false);return alert("기존 데이터 확인 오류: "+oldErr.message+(/drip2_sales|does not exist|schema cache/i.test(oldErr.message)?"\n\n(최초 1회 SQL 실행이 필요해요)":""));}
+      const keyOf=r=>r.sale_date+"|"+r.p_code+"|"+salesNorm(r.customer);
+      const sumBy=list=>{const m=new Map();list.forEach(r=>{const k=keyOf(r);m.set(k,(m.get(k)||0)+(r.qty||0));});return m;};
+      const newM=sumBy(out),oldM=sumBy(oldRows||[]);
+      let dAdd=0,dDel=0,dChg=0,qAdd=0,qDel=0;
+      newM.forEach((v,k)=>{if(!oldM.has(k)){dAdd++;qAdd+=v;}else if(oldM.get(k)!==v)dChg++;});
+      oldM.forEach((v,k)=>{if(!newM.has(k)){dDel++;qDel+=v;}});
+      const oldQty=(oldRows||[]).reduce((a,r)=>a+(r.qty||0),0);
+      if(oldM.size>0&&dAdd===0&&dDel===0&&dChg===0){
+        setUploading(false);
+        return alert("✅ 변경 없음\n\n"+from+" ~ "+to+" 기간의 저장된 데이터와 내용이 똑같아서 저장하지 않았어요.\n("+oldM.size.toLocaleString()+"건 / 순수량 "+oldQty.toLocaleString()+"개)");
+      }
+      const oldDates=[...new Set((oldRows||[]).map(r=>r.sale_date))];
+      const diffMsg=oldM.size===0
+        ?"\n\n🆕 이 기간은 처음 올리는 데이터예요."
+        :"\n\n🔍 기존 데이터와 비교 (기존 "+oldM.size.toLocaleString()+"건 / "+oldQty.toLocaleString()+"개)\n· 추가 "+dAdd.toLocaleString()+"건 (+"+qAdd.toLocaleString()+"개)\n· 수량 변경 "+dChg.toLocaleString()+"건\n· 삭제 "+dDel.toLocaleString()+"건 (-"+qDel.toLocaleString()+"개)";
+      // 많이 지워지면: ERP에서 거래처·품목을 골라서(필터) 뽑은 파일일 수 있음 → 그대로 올리면 나머지가 지워짐
+      const bigDelete=oldM.size>0&&dDel>Math.max(20,oldM.size*0.1);
+      const delWarn=bigDelete?"\n\n🚨 기존 데이터의 "+Math.round(dDel/oldM.size*100)+"%가 지워져요!\nERP에서 특정 거래처·품목만 골라서 뽑은 파일이라면 나머지 판매 데이터가 사라져요. 전체 조건으로 뽑은 파일이 맞는지 꼭 확인해주세요.":"";
+      const noBomMsg=noBom.length?"\n\n※ 낱개 수를 알 수 없는(BOM 미등록) "+noBom.length+"종은 낱개 보기에서 0으로 계산돼요: "+noBom.slice(0,6).join(", ")+(noBom.length>6?" 외":""):"";
+      if(!window.confirm("📤 판매현황 업로드\n\n기간: "+from+" ~ "+to+"\n저장: "+out.length.toLocaleString()+"건 / 순수량: "+totalQty.toLocaleString()+"개"+diffMsg+delWarn+regMsg+mapMsg+exclMsg+noBomMsg+"\n\n이 기간에 이미 있는 판매 데이터는 지우고 새로 저장해요. 진행할까요?")){setUploading(false);return;}
+      // 신규 제품 자동 등록 (확인 후)
+      const regCodes=Object.keys(newReg);
+      const doRegister=async()=>{
+        if(!regCodes.length)return true;
+        const{data:exist,error:e0}=await sb.from("drip2_product_master").select("code,sort_order").in("code",regCodes);
+        if(e0){alert("제품마스터 확인 오류: "+e0.message);return false;}
+        const already=new Set((exist||[]).map(x=>x.code));
+        const maxO=Math.max(0,...pMaster.map(p=>p.sort_order||0));
+        const ins=regCodes.filter(c=>!already.has(c)).map((c,i)=>({code:c,name:newReg[c].name||c,sort_order:maxO+1+i,active:true,speed_sec:null}));
+        if(!ins.length)return true;
+        const{error}=await sb.from("drip2_product_master").insert(ins);
+        if(error){alert("제품마스터 자동 등록 오류: "+error.message);return false;}
+        return true;
+      };
+      if(bigDelete&&!window.confirm("🚨 한 번 더 확인할게요.\n\n기존 "+dDel.toLocaleString()+"건("+qDel.toLocaleString()+"개)이 지워져요.\n전체 조건으로 뽑은 ERP 파일이 맞나요?")){setUploading(false);return;}
+      if(!(await doRegister())){setUploading(false);return;}
+      if(regCodes.length&&onMasterChanged)await onMasterChanged();
+      const{error}=await sb.rpc("drip2_sales_replace",{p_from:from,p_to:to,p_rows:out});
+      setUploading(false);
+      if(error)return alert("업로드 오류: "+error.message+(/function|does not exist|schema cache/i.test(error.message)?"\n\n(최초 1회 SQL 실행이 필요해요)":""));
+      alert("✅ 업로드 완료\n"+from+" ~ "+to+" · "+out.length.toLocaleString()+"건"+(regList.length?"\n\n🆕 제품마스터에 "+regList.length+"종 자동 등록했어요.\n⚠️ 제품마스터 탭에서 생산속도, BOM관리 탭에서 낱개 구성을 꼭 설정해주세요:\n"+regList.slice(0,10).map(([c,x])=>"· "+c+" "+x.name).join("\n"):""));
+      loadMeta();
+      // 올린 기간이 보이도록 조회기간 맞춤
+      applyRange(from,to);
+      if(range.from===from&&range.to===to)loadRows(from,to);
+      setView("trend");
+    }catch(err){setUploading(false);alert("파일 오류: "+err.message);}
+  };
+
+  const presets=(()=>{const t=today(),y=t.slice(0,4),m=t.slice(0,7);const lme=addDays(m+"-01",-1);
+    return[["최근 1개월",addDays(t,-30),t],["최근 3개월",addDays(t,-90),t],["최근 6개월",addDays(t,-182),t],["이번 달",m+"-01",t],["지난 달",lme.slice(0,7)+"-01",lme],["올해",y+"-01-01",t],...(meta&&!meta.empty?[["업로드 전체",meta.from,meta.to]]:[])];})();
+  const tableMissing=/drip2_sales|relation|does not exist|schema cache/i.test(dataErr);
+
+  const VIEWS=[["trend","📈 구분별 추이"],["product","🎁 제품별"],["customer","🏢 거래처 분류 확인"],["rules","⚙️ 분류 규칙"],["upload","📤 엑셀 업로드"]];
+  return(
+    <div>
+      <SecTitle icon="🛒" title={"판매 추이 — "+catOrder.join(" · ")}/>
+
+      {/* 세부탭 */}
+      <div style={{display:"flex",gap:0,marginBottom:18,borderBottom:"2px solid #6a8a5a33",flexWrap:"wrap"}}>
+        {VIEWS.map(([k,l])=>(
+          <button key={k} onClick={()=>setView(k)} style={{padding:"9px 18px",border:"none",borderBottom:"3px solid "+(view===k?"#f5c97a":"transparent"),marginBottom:-2,background:"transparent",cursor:"pointer",fontFamily:"inherit",fontSize:14,fontWeight:view===k?700:400,color:view===k?"#f5c97a":"#a8b8a0"}}>{l}</button>
+        ))}
+      </div>
+
+      {tableMissing&&(
+        <div style={{padding:"12px 16px",background:"rgba(224,80,80,.12)",border:"1px solid #e0505066",borderRadius:8,fontSize:13,color:"#f0a0a0",marginBottom:16}}>⚠️ 판매 데이터 테이블이 아직 없어요. Supabase SQL Editor에서 최초 1회 SQL을 실행해주세요.</div>
+      )}
+
+      {/* 기간 선택 (분석 화면 공통) */}
+      {(view==="trend"||view==="product"||view==="customer")&&(
+        <div style={{background:"rgba(255,255,255,.05)",border:"1px solid #7a8a7044",borderRadius:10,padding:"12px 16px",marginBottom:16}}>
+          <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+            <span style={{color:"#c8ddb8",fontWeight:700,fontSize:13}}>📅 조회 기간</span>
+            <input type="date" value={draft.from} max={draft.to||undefined} onChange={e=>setDraft(d=>({...d,from:e.target.value}))} style={{...inp,width:150}}/>
+            <span style={{color:"#8a9a88"}}>~</span>
+            <input type="date" value={draft.to} min={draft.from||undefined} onChange={e=>setDraft(d=>({...d,to:e.target.value}))} style={{...inp,width:150}}/>
+            <button onClick={()=>applyRange(draft.from,draft.to)} style={{...primaryBtn,padding:"6px 16px",fontSize:13}}>🔍 조회</button>
+            <span style={{fontSize:12,color:"#8a9a88",marginLeft:"auto"}}>
+              {loading?"불러오는 중...":range.from+" ~ "+range.to+" · "+rows.length.toLocaleString()+"건"}
+              {meta&&!meta.empty&&<span style={{marginLeft:8}}>· 업로드된 데이터 {meta.from} ~ {meta.to}</span>}
+            </span>
+          </div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>
+            {presets.map(([l,f,t])=>{const on=range.from===f&&range.to===t;return(<button key={l} onClick={()=>applyRange(f,t)} style={chip(on)}>{l}</button>);})}
+          </div>
+        </div>
+      )}
+
+      {/* 기준(완제품/낱개) — 분석 화면 공통 */}
+      {(view==="trend"||view==="product"||view==="customer")&&(
+        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:14,fontSize:13}}>
+          <span style={{color:"#a8b8a0",fontWeight:700}}>기준</span>
+          {[["unit","📦 낱개"],["qty","🎁 완제품"]].map(([k,l])=>(<button key={k} onClick={()=>setMetric(k)} style={chip(metric===k,"#4db6ac")}>{l}</button>))}
+          {metric==="unit"&&<span style={{fontSize:12,color:"#8a9a88"}}>판매수량 × 1개당 낱개 수 (ERP 품목명의 "N개입" 우선, 없으면 BOM)</span>}
+          {metric==="unit"&&unitDiff.length>0&&<span title={unitDiff.map(x=>x.code+" "+pLabel(x.code)+": ERP 판매 1개 = 낱개 "+x.erp+"개 / 생산 1박스 = 낱개 "+x.bom+"개").join("\n")} style={{fontSize:12,color:"#c8a06a",cursor:"help",borderBottom:"1px dotted #c8a06a"}}>ℹ️ ERP 판매단위가 생산단위와 다른 품목 {unitDiff.length}종 {metric==="unit"?"→ ERP 기준 낱개로 계산":"→ 생산 박스 수로 환산"}</span>}
+          {metric==="qty"&&singleCodes.length>0&&<span title={singleCodes.map(c=>c+" "+pLabel(c)).join("\n")} style={{fontSize:12,color:"#c8a06a",cursor:"help",borderBottom:"1px dotted #c8a06a"}}>ℹ️ 1개 단위로 판매하는 품목 {singleCodes.length}종(낱개 {fmt(singleUnits)}개)은 완제품에서 제외 · 낱개 기준엔 포함</span>}
+          {metric==="unit"&&noBomCodes.length>0&&<span style={{fontSize:12,color:"#e89090"}}>⚠️ BOM 미등록 {noBomCodes.length}종({noBomCodes.slice(0,4).map(c=>pLabel(c)).join(", ")}{noBomCodes.length>4?" 외":""})은 0으로 계산돼요 → BOM관리 탭에서 설정</span>}
+          {outRows>0&&<span style={{fontSize:12,color:"#c8a06a"}}>※ 제품마스터에 없는 품목 {outRows.toLocaleString()}건은 집계에서 빠졌어요</span>}
+        </div>
+      )}
+
+      {/* ════ 구분별 추이 ════ */}
+      {view==="trend"&&(<>
+        <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:22}}>
+          <KpiCard icon="📦" label="총 판매 (낱개)" value={fmt(totUnitAll)+"개"} sub={vRows.length.toLocaleString()+"건 · 반품 차감"} color="#4db6ac"/>
+          <KpiCard icon="🎁" label="총 판매 (완제품)" value={fmt(totQtyAll)+"개"} sub={(totQtyAll?"완제품 1개당 평균 낱개 "+(totUnitMulti/totQtyAll).toFixed(1)+"개":"ERP 판매수량")+(singleCodes.length?" · 1개 단위 "+singleCodes.length+"종 제외":"")}/>
+          {CATS.map(c=>(
+            <KpiCard key={c.key} icon="●" label={c.key+" ("+c.desc+") · "+unitWord} value={fmt(tot.cat[c.key])+"개"} sub={"비중 "+pct(tot.cat[c.key],tot.qty)+"%"} color={c.color}/>
+          ))}
+        </div>
+        {/* 채널·구분 비중 바 */}
+        <div style={{marginBottom:22}}>
+          <div style={{display:"flex",height:26,borderRadius:6,overflow:"hidden",border:"1px solid #7a8a7044"}}>
+            {grpOrder.filter(k=>tot.grp[k]>0).map(k=>{const p=tot.qty?tot.grp[k]/tot.qty*100:0;return(
+              <div key={k} title={k+" "+fmt(tot.grp[k])+"개 ("+p.toFixed(1)+"%)"} style={{width:p+"%",background:grpColor[k],display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#fff",textShadow:"0 1px 2px rgba(0,0,0,.6)",whiteSpace:"nowrap",overflow:"hidden"}}>{p>=6?k+" "+p.toFixed(0)+"%":""}</div>);})}
+          </div>
+          <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:8,fontSize:12}}>
+            {grpOrder.map(k=>(<span key={k} style={{color:"#c8c8b8"}}><span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:grpColor[k],marginRight:5}}/>{k} <b style={{color:"#f0f0e8"}}>{fmt(tot.grp[k])}</b> <Pct v={tot.grp[k]} t={tot.qty}/></span>))}
+          </div>
+        </div>
+
+        <div style={{display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:14,fontSize:13}}>
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            <span style={{color:"#a8b8a0",fontWeight:700}}>단위</span>
+            {[["day","일별"],["week","주별"],["month","월별"]].map(([k,l])=>(<button key={k} onClick={()=>setGran(k)} style={chip(gran===k,"#f5c97a")}>{l}</button>))}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <span style={{color:"#a8b8a0",fontWeight:700}}>보기</span>
+            <button onClick={()=>setCatSel("__all__")} style={chip(catSel==="__all__")}>{allLabel}</button>
+            <button onClick={()=>setCatSel("__cat4__")} style={chip(catSel==="__cat4__")}>구분 합계 ({catOrder.length}개)</button>
+            {CATS.map(c=>(<button key={c.key} onClick={()=>setCatSel(c.key)} style={chip(catSel===c.key,c.color)}><span style={{width:10,height:10,borderRadius:3,background:c.color,display:"inline-block"}}/>{c.key} 상세</button>))}
+          </div>
+        </div>
+
+        <div style={{marginBottom:24}}>
+          <SecTitle icon="📈" title={(catSel==="__all__"?allLabel:g4?"구분별":catSel+" 채널별")+" 판매 추이 ("+unitWord+" · "+(gran==="day"?"일별":gran==="week"?"주별, 월요일 시작":"월별")+")"}/>
+          <ChartLegend items={isAll?allKeys.map(k=>({label:k,color:allColor[k]})):[...chTop.map(x=>({label:x.ch,color:chColor[x.cat+"|"+x.ch]})),...(chRest.length?[{label:"기타 "+chRest.length+"곳",color:"#5a6a5a"}]:[])]}/>
+          <StackedBarChart data={chartData} unit="개" height={250}/>
+        </div>
+
+        {/* 기간 × 구분 표 */}
+        <div style={{marginBottom:24}}>
+          <SecTitle icon="🗓" title={(catSel==="__all__"?"기간별 × "+allLabel:g4?"기간별 × 구분":"기간별 × "+catSel+" 채널별")+" 판매량 ("+unitWord+")"}/>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+              <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
+                <th style={{...th,textAlign:"left",position:"sticky",left:0,background:"#4a3f30"}}>기간</th>
+                {(isAll?allKeys.map(k=>({k,l:k,c:allColor[k]})):[...chTop.map(x=>({k:x.cat+"|"+x.ch,l:x.ch,c:chColor[x.cat+"|"+x.ch]})),...(chRest.length?[{k:"etc",l:"기타 "+chRest.length+"곳",c:"#5a6a5a"}]:[])]).map(x=>(
+                  <th key={x.k} style={{...th,textAlign:"right"}}><span style={{display:"inline-block",width:9,height:9,borderRadius:2,background:x.c,marginRight:5}}/>{x.l}</th>))}
+                <th style={{...th,textAlign:"right",color:"#f5c97a"}}>합계</th>
+              </tr></thead>
+              <tbody>
+                {[...buckets].reverse().map(b=>{const B=tot.bucket[b];const L=bucketLabel(b);
+                  const cols=isAll?allKeys.map(k=>({k,v:gv(B,k)})):[...chTop.map(x=>{const k=x.cat+"|"+x.ch;return{k,v:B.ch[k]||0};}),...(chRest.length?[{k:"etc",v:chRest.reduce((a,x)=>a+(B.ch[x.cat+"|"+x.ch]||0),0)}]:[])];
+                  const rt=isAll?B.qty:(B.cat[catSel]||0);
+                  return(<tr key={b}>
+                    <td style={{...td,whiteSpace:"nowrap",position:"sticky",left:0,background:"#353530"}}>{L.label}{L.sub&&<span style={{color:"#8a9a88",fontSize:11,marginLeft:4}}>{gran==="week"?L.sub:"("+L.sub+")"}</span>}</td>
+                    {cols.map(x=>{const a=x.v>0&&rt?0.08+0.55*(x.v/rt):0;return(
+                      <td key={x.k} style={{...num,background:a?`rgba(77,182,172,${a.toFixed(3)})`:"transparent",color:x.v?"#f0f0e8":"#5a6a58"}}>{x.v?<>{fmt(x.v)} <Pct v={x.v} t={rt} hi/></>:"-"}</td>);})}
+                    <td style={{...num,fontWeight:700,color:"#f5c97a"}}>{fmt(rt)}</td>
+                  </tr>);})}
+                {buckets.length>0&&(()=>{
+                  const cols=isAll?allKeys.map(k=>({k,v:gv(tot,k)})):[...chTop.map(x=>({k:x.cat+"|"+x.ch,v:x.qty})),...(chRest.length?[{k:"etc",v:chRest.reduce((a,x)=>a+x.qty,0)}]:[])];
+                  return(<tr style={{background:"rgba(200,130,26,.15)"}}>
+                    <td style={{...td,fontWeight:700,color:"#f5c97a",position:"sticky",left:0,background:"#4a3f30"}}>합계</td>
+                    {cols.map(x=><td key={x.k} style={{...num,fontWeight:700,color:"#f5c97a"}}>{fmt(x.v)} <Pct v={x.v} t={selTotal}/></td>)}
+                    <td style={{...num,fontWeight:800,color:"#f5c97a"}}>{fmt(selTotal)}</td>
+                  </tr>);})()}
+                {!buckets.length&&<tr><td colSpan={10} style={{...td,textAlign:"center",color:"#8a9a88",padding:24}}>{loading?"불러오는 중...":"이 기간에 판매 데이터가 없어요. '📤 엑셀 업로드'에서 판매현황집계 엑셀을 올려주세요."}</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>※ 최근 기간이 위에 있어요. 괄호 %는 그 기간 합계 중 비중(30% 이상 노란색). 수량은 반품을 뺀 순수량이에요.</div>
+        </div>
+
+        {/* 채널 순위 */}
+        <div style={{marginBottom:10}}>
+          <SecTitle icon="🏆" title={(isAll?"전체":catSel)+" 채널별 판매 순위 ("+unitWord+")"}/>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+              <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
+                {["순위","구분","채널","거래처 수","판매량","비중"].map((h,i)=><th key={h} style={{...th,textAlign:i>=3?"right":"left"}}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {rankList.slice(0,30).map((x,i)=>(<React.Fragment key={x.cat+"|"+x.ch}>
+                <tr onClick={x.isMerged?()=>setRankOpen(o=>({...o,[x.cat]:!o[x.cat]})):undefined} style={{cursor:x.isMerged?"pointer":"default",background:x.isMerged&&rankOpen[x.cat]?"rgba(122,138,122,.15)":"transparent"}}>
+                  <td style={td}>{i+1}</td>
+                  <td style={td}><CatDot c={x.cat}/>{x.cat}</td>
+                  <td style={{...td,fontWeight:700,color:"#f0f0e8",wordBreak:"keep-all"}}>
+                    {x.isMerged&&<span style={{display:"inline-block",width:16,color:"#c8a06a"}}>{rankOpen[x.cat]?"▼":"▶"}</span>}{x.ch}
+                    {x.isMerged&&<span style={{marginLeft:8,fontSize:11,color:"#8a9a88",fontWeight:400}}>{rankOpen[x.cat]?"접기":"눌러서 업체별 보기"}</span>}
+                  </td>
+                  <td style={num}>{x.cust.size.toLocaleString()}곳</td>
+                  <td style={{...num,fontWeight:700,color:"#4db6ac"}}>{fmt(x.qty)}개</td>
+                  <td style={num}>{pct(x.qty,selTotal)}%</td>
+                </tr>
+                {x.isMerged&&rankOpen[x.cat]&&x.children.map((c,j)=>(
+                  <tr key={"b"+j} style={{background:"rgba(122,138,122,.08)"}}>
+                    <td style={{...td,color:"#8a9a88",fontSize:12,textAlign:"right"}}>{j+1}</td>
+                    <td style={{...td,color:"#8a9a88",fontSize:12}}>└ {x.cat}</td>
+                    <td style={{...td,color:"#e0e0d8",wordBreak:"keep-all",paddingLeft:28}}>{c.ch}</td>
+                    <td style={{...num,color:"#8a9a88",fontSize:12}}>{x.cat} 중 {pct(c.qty,x.qty)}%</td>
+                    <td style={{...num,color:"#a8d8d0"}}>{fmt(c.qty)}개</td>
+                    <td style={{...num,color:"#8a9a88"}}>{pct(c.qty,selTotal)}%</td>
+                  </tr>))}
+                </React.Fragment>))}
+                {rankList.length>30&&<tr><td colSpan={6} style={{...td,textAlign:"center",color:"#8a9a88"}}>외 {rankList.length-30}개 채널 (거래처 분류 확인 탭에서 전체 확인)</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </>)}
+
+      {/* ════ 제품별 ════ */}
+      {view==="product"&&(()=>{
+        const prods=Object.values(tot.prod).map(p=>({...p,v:prodCat==="__all__"?p.qty:(p.cat[prodCat]||0)})).filter(p=>p.v!==0).sort((a,b)=>b.v-a.v);
+        const pt=prods.reduce((a,p)=>a+p.v,0);
+        // 제품표 열: 선택한 구분에 속한 그룹만 (전체면 모든 그룹)
+        const pCols=grpOrder.filter(k=>prodCat==="__all__"||grpCatOf[k]===prodCat);
+        const selP=prodSel&&tot.prod[prodSel];
+        const pChart=selP?buckets.map(b=>({...bucketLabel(b),segs:grpOrder.map(k=>({key:k,name:k,value:(tot.bucket[b].prod[prodSel]||{})[k]||0,color:grpColor[k]}))})):[];
+        return(<>
+          <div style={{display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:14,fontSize:13}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+              <span style={{color:"#a8b8a0",fontWeight:700}}>구분</span>
+              <button onClick={()=>setProdCat("__all__")} style={chip(prodCat==="__all__")}>전체</button>
+              {CATS.map(c=>(<button key={c.key} onClick={()=>setProdCat(c.key)} style={chip(prodCat===c.key,c.color)}><span style={{width:10,height:10,borderRadius:3,background:c.color,display:"inline-block"}}/>{c.key}</button>))}
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <span style={{color:"#a8b8a0",fontWeight:700}}>추이 단위</span>
+              {[["day","일별"],["week","주별"],["month","월별"]].map(([k,l])=>(<button key={k} onClick={()=>setGran(k)} style={chip(gran===k,"#f5c97a")}>{l}</button>))}
+            </div>
+          </div>
+
+          {selP&&(
+            <div style={{background:"rgba(255,255,255,.03)",border:"1px solid #c8821a55",borderRadius:10,padding:"12px 16px",marginBottom:20}}>
+              <SecTitle icon="📈" title={"["+selP.code+"] "+selP.name+" 판매 추이"} right={<button onClick={()=>setProdSel("")} style={{...delBtn,fontSize:12}}>✕ 닫기</button>}/>
+              <div style={{display:"flex",gap:14,flexWrap:"wrap",fontSize:13,marginBottom:8}}>
+                <span style={{color:"#f5c97a",fontWeight:700}}>합계 {fmt(selP.qty)}개</span>
+                {grpOrder.filter(k=>selP.grp[k]).map(k=>(<span key={k} style={{color:"#c8c8b8"}}><span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:grpColor[k],marginRight:5}}/>{k} {fmt(selP.grp[k])} <Pct v={selP.grp[k]||0} t={selP.qty}/></span>))}
+              </div>
+              <ChartLegend items={grpOrder.filter(k=>selP.grp[k]).map(k=>({label:k,color:grpColor[k]}))}/>
+              <StackedBarChart data={pChart} unit="개" height={220}/>
+            </div>
+          )}
+
+          <SecTitle icon="🎁" title={"제품별 판매량 ("+(prodCat==="__all__"?"전체":prodCat)+" · "+unitWord+")"}/>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+              <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
+                <th style={{...th,textAlign:"left",position:"sticky",left:0,zIndex:2,background:"#4a3f30",minWidth:280}}>순위 · 제품</th>
+                {pCols.map(k=><th key={k} style={{...th,textAlign:"right"}}><span style={{display:"inline-block",width:9,height:9,borderRadius:2,background:grpColor[k],marginRight:5}}/>{k}</th>)}
+                <th style={{...th,textAlign:"right",color:"#f5c97a"}}>합계</th>
+                {prodCat!=="__all__"&&<th style={{...th,textAlign:"right"}}>{prodCat} 중 비중</th>}
+              </tr></thead>
+              <tbody>
+                {prods.map((p,i)=>(<tr key={p.code} onClick={()=>setProdSel(p.code===prodSel?"":p.code)} style={{cursor:"pointer",background:p.code===prodSel?"rgba(200,130,26,.15)":"transparent"}}>
+                  <td style={{...td,position:"sticky",left:0,zIndex:1,background:p.code===prodSel?"#4a4230":"#353530",minWidth:280,maxWidth:360,boxShadow:"2px 0 4px rgba(0,0,0,.25)"}}>
+                    <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                      <span style={{color:"#8a9a88",fontSize:12,minWidth:18,textAlign:"right",paddingTop:1}}>{i+1}</span>
+                      <div style={{lineHeight:1.35}}>
+                        <div style={{color:"#9a7050",fontSize:11}}>{p.code}</div>
+                        <div style={{color:"#f5c97a",fontWeight:700,wordBreak:"keep-all"}}>{p.name}</div>
+                      </div>
+                    </div>
+                  </td>
+                  {pCols.map(k=>{const v=p.grp[k]||0;return(<td key={k} style={{...num,color:v?"#f0f0e8":"#5a6a58"}}>{v?<>{fmt(v)} <Pct v={v} t={p.qty} hi/></>:"-"}</td>);})}
+                  <td style={{...num,fontWeight:700,color:"#f5c97a"}}>{fmt(p.qty)}</td>
+                  {prodCat!=="__all__"&&<td style={num}>{pct(p.v,pt)}%</td>}
+                </tr>))}
+                {!prods.length&&<tr><td colSpan={8} style={{...td,textAlign:"center",color:"#8a9a88",padding:24}}>데이터가 없어요.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>※ 행을 누르면 그 제품의 구분별 판매 추이가 위에 나와요. 괄호 %는 그 제품 판매 중 구분별 비중이에요.</div>
+        </>);
+      })()}
+
+      {/* ════ 거래처 분류 확인 ════ */}
+      {view==="customer"&&(()=>{
+        const q=salesNorm(custQ);
+        const list=Object.values(tot.cust).filter(c=>(custCat==="__all__"||c.category===custCat)&&(!q||salesNorm(c.name).includes(q)||salesNorm(c.channel).includes(q))).sort((a,b)=>b.qty-a.qty);
+        const cnt={};Object.values(tot.cust).forEach(c=>{cnt[c.category]=(cnt[c.category]||0)+1;});
+        return(<>
+          <div style={{fontSize:12,color:"#a8b8a0",marginBottom:12,lineHeight:1.6}}>조회 기간에 나온 거래처가 어떤 규칙으로 분류됐는지 확인하는 화면이에요. 잘못 분류된 이름이 있으면 <b style={{color:"#f5c97a"}}>⚙️ 분류 규칙</b>에서 단어를 추가하거나 순서를 바꿔주세요. (규칙에 안 걸린 거래처는 자동으로 <b>{FALLBACK}</b>)</div>
+          <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:14}}>
+            <input value={custQ} onChange={e=>setCustQ(e.target.value)} placeholder="🔍 거래처 이름 검색" style={{...inp,width:220}}/>
+            <button onClick={()=>setCustCat("__all__")} style={chip(custCat==="__all__")}>전체 {Object.keys(tot.cust).length}</button>
+            {CATS.map(c=>(<button key={c.key} onClick={()=>setCustCat(c.key)} style={chip(custCat===c.key,c.color)}><span style={{width:10,height:10,borderRadius:3,background:c.color,display:"inline-block"}}/>{c.key} {cnt[c.key]||0}</button>))}
+          </div>
+          <div style={{overflowX:"auto",maxHeight:600,overflowY:"auto",border:"1px solid #c8821a33",borderRadius:6}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)"}}>
+              <thead><tr style={{background:"#4a3f30",position:"sticky",top:0,zIndex:1}}>
+                {["거래처명 (ERP)","구분","채널","적용 규칙","건수","판매량"].map((h,i)=><th key={h} style={{...th,textAlign:i>=4?"right":"left"}}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {list.slice(0,500).map(c=>(<tr key={c.name}>
+                  <td style={{...td,color:"#f0f0e8",wordBreak:"keep-all"}}>{c.name}</td>
+                  <td style={{...td,whiteSpace:"nowrap"}}><CatDot c={c.category}/>{c.category}</td>
+                  <td style={{...td,wordBreak:"keep-all"}}>{c.channel}</td>
+                  <td style={{...td,fontSize:12,color:c.rule?"#c8a06a":"#7a8a78"}}>{c.rule?"「"+c.rule.keyword+"」 "+(SALES_MATCH_TYPES.find(m=>m[0]===c.rule.match_type)?.[1]||""):"규칙 없음 → "+FALLBACK}</td>
+                  <td style={num}>{c.rows.toLocaleString()}</td>
+                  <td style={{...num,fontWeight:700,color:c.qty<0?"#e89090":"#4db6ac"}}>{fmt(c.qty)}개</td>
+                </tr>))}
+                {!list.length&&<tr><td colSpan={6} style={{...td,textAlign:"center",color:"#8a9a88",padding:24}}>해당하는 거래처가 없어요.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          {list.length>500&&<div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>※ 판매량 상위 500곳만 표시돼요. 검색으로 좁혀보세요. (전체 {list.length.toLocaleString()}곳)</div>}
+        </>);
+      })()}
+
+      {/* ════ 분류 규칙 ════ */}
+      {view==="rules"&&(
+        <div>
+          <div style={{fontSize:12,color:"#a8b8a0",marginBottom:14,lineHeight:1.7}}>
+            ERP 거래처 이름에 아래 <b style={{color:"#f5c97a"}}>단어가 들어있으면</b> 해당 구분·채널로 자동 분류해요. <b>위에서부터 먼저 맞는 규칙 1개</b>만 적용돼요. (예: 「아임웹」이 「영도매장」보다 위라서 '아임웹영도경찰서'는 자사몰)<br/>
+            띄어쓰기·영문 대소문자는 무시해요. 채널명을 비우면 ERP 거래처명을 그대로 채널로 써요. 어떤 규칙에도 안 걸리면 <b>{FALLBACK}</b>이에요. (아래 구분 관리에서 변경)<br/>
+            규칙을 바꾸면 <b>이미 올린 과거 데이터에도 바로 반영</b>돼요. (엑셀 다시 올릴 필요 없음)
+          </div>
+          {rulesErr&&<div style={{padding:"10px 14px",background:"rgba(224,80,80,.12)",border:"1px solid #e0505066",borderRadius:8,fontSize:12,color:"#f0a0a0",marginBottom:12}}>⚠️ 규칙 테이블이 아직 없어서 기본 규칙으로 계산 중이에요. 최초 1회 SQL을 실행하면 여기서 직접 수정할 수 있어요.</div>}
+          {!rulesErr&&!rulesFromDb&&<div style={{padding:"8px 14px",background:"rgba(242,201,76,.08)",border:"1px solid #f2c94c44",borderRadius:8,fontSize:12,color:"#f2c94c",marginBottom:12}}>💡 지금은 기본 규칙이에요. 처음 수정하는 순간 DB에 저장돼요.</div>}
+
+          {/* 구분 관리 */}
+          <div style={{background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:10,padding:"14px 16px",marginBottom:18}}>
+            <div style={{fontSize:15,fontWeight:700,color:"#c8ddb8",marginBottom:6}}>🏷 구분 관리</div>
+            <div style={{fontSize:12,color:"#8a9a88",marginBottom:10,lineHeight:1.6}}>
+              <b style={{color:"#c8c8b8"}}>채널별로 나눔</b>: 기본 보기에서 채널마다 열을 따로 (예: 플랫폼 → 네이버·컬리…) / 끄면 구분 하나로 합쳐서 한 열<br/>
+              <b style={{color:"#c8c8b8"}}>순위에서 묶기</b>: 채널 순위에서 한 줄로 묶고 눌러서 펼쳐보기 (예: 대량납품) · <b style={{color:"#c8c8b8"}}>규칙 없을 때</b>: 어떤 규칙에도 안 걸린 거래처가 들어갈 구분
+            </div>
+            {catsErr&&<div style={{padding:"8px 12px",background:"rgba(224,80,80,.12)",border:"1px solid #e0505066",borderRadius:8,fontSize:12,color:"#f0a0a0",marginBottom:10}}>⚠️ 구분 테이블이 아직 없어서 기본 4개 구분으로 계산 중이에요. 최초 1회 SQL을 실행하면 구분을 추가할 수 있어요.</div>}
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead><tr style={{background:"rgba(200,130,26,.15)"}}>
+                  {["순서","구분","설명","채널별로 나눔","순위에서 묶기","규칙 없을 때","규칙 수",""].map(h=><th key={h} style={{...th,textAlign:"left"}}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {CATS.map((c,i)=>{const ed=editCatId===c.id;const nRules=(rules||[]).filter(r=>r.category===c.key).length;return(
+                    <tr key={c.id}>
+                      <td style={{...td,whiteSpace:"nowrap"}}>
+                        <button onClick={()=>moveCat(i,-1)} disabled={i===0} style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",borderRadius:4,color:"#a8b8a0",padding:"1px 7px",cursor:"pointer",opacity:i===0?.3:1,fontFamily:"inherit",marginRight:3}}>▲</button>
+                        <button onClick={()=>moveCat(i,1)} disabled={i===CATS.length-1} style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",borderRadius:4,color:"#a8b8a0",padding:"1px 7px",cursor:"pointer",opacity:i===CATS.length-1?.3:1,fontFamily:"inherit"}}>▼</button>
+                      </td>
+                      {ed?(<>
+                        <td style={td}><div style={{display:"flex",gap:6,alignItems:"center"}}><input type="color" value={editCat.color} onChange={e=>setEditCat(x=>({...x,color:e.target.value}))} style={{width:30,height:28,border:"none",background:"none",cursor:"pointer"}}/><input autoFocus value={editCat.name} onChange={e=>setEditCat(x=>({...x,name:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&saveCat()} style={{...inp,width:110}}/></div></td>
+                        <td style={td}><input value={editCat.description||""} onChange={e=>setEditCat(x=>({...x,description:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&saveCat()} style={{...inp,width:160}}/></td>
+                      </>):(<>
+                        <td style={{...td,whiteSpace:"nowrap"}}><CatDot c={c.key}/><b style={{color:c.color}}>{c.key}</b></td>
+                        <td style={{...td,color:"#a8b8a0",fontSize:12}}>{c.desc}</td>
+                      </>)}
+                      <td style={td}><button onClick={()=>patchCat(c.id,{split:!c.split})} style={{...chip(!!c.split,"#6fcf97"),padding:"2px 10px"}}>{c.split?"ON":"OFF"}</button></td>
+                      <td style={td}><button onClick={()=>patchCat(c.id,{merge:!c.merge})} style={{...chip(!!c.merge,"#6fcf97"),padding:"2px 10px"}}>{c.merge?"ON":"OFF"}</button></td>
+                      <td style={td}><button onClick={()=>!c.is_default&&setDefaultCat(c.id)} style={{...chip(!!c.is_default,"#f5c97a"),padding:"2px 10px"}}>{c.is_default?"✔ 기본":"지정"}</button></td>
+                      <td style={{...td,color:"#a8b8a0"}}>{nRules}개</td>
+                      <td style={{...td,whiteSpace:"nowrap"}}>
+                        {ed?(<><button onClick={saveCat} style={{...primaryBtn,fontSize:12,padding:"4px 12px"}}>저장</button> <button onClick={()=>setEditCatId(null)} style={{...delBtn,fontSize:12}}>취소</button></>):(<>
+                          <button onClick={()=>{setEditCatId(c.id);setEditCat({name:c.key,color:c.color||"#888888",description:c.description||""});}} style={{background:"rgba(200,130,26,.2)",border:"1px solid #c8821a44",borderRadius:6,color:"#c8a06a",padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit",marginRight:6}}>✏️ 수정</button>
+                          <button onClick={()=>delCat(c)} style={{...delBtn,fontSize:12}}>✕</button>
+                        </>)}
+                      </td>
+                    </tr>);})}
+                </tbody>
+              </table>
+            </div>
+            <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap",marginTop:12}}>
+              <div><div style={lbl}>새 구분 이름 *</div><div style={{display:"flex",gap:6,alignItems:"center"}}><input type="color" value={newCat.color} onChange={e=>setNewCat(x=>({...x,color:e.target.value}))} style={{width:30,height:30,border:"none",background:"none",cursor:"pointer"}}/><input value={newCat.name} onChange={e=>setNewCat(x=>({...x,name:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addCat()} placeholder="예) 코스트코" style={{...inp,width:130}}/></div></div>
+              <div><div style={lbl}>설명 (선택)</div><input value={newCat.description} onChange={e=>setNewCat(x=>({...x,description:e.target.value}))} placeholder="예) 창고형 할인점" style={{...inp,width:160}}/></div>
+              <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:"#c8c8b8",paddingBottom:8,cursor:"pointer"}}><input type="checkbox" checked={newCat.split} onChange={e=>setNewCat(x=>({...x,split:e.target.checked}))}/>채널별로 나눔</label>
+              <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:"#c8c8b8",paddingBottom:8,cursor:"pointer"}}><input type="checkbox" checked={newCat.merge} onChange={e=>setNewCat(x=>({...x,merge:e.target.checked}))}/>순위에서 묶기</label>
+              <button onClick={addCat} style={primaryBtn}>+ 구분 추가</button>
+            </div>
+            <div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>※ 구분을 만든 뒤 아래 규칙에서 거래처 단어(예: 코스트코)를 그 구분으로 지정하세요. 순서는 화면의 열·막대 순서예요.</div>
+          </div>
+
+          {/* 이름 테스트 */}
+          <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:14,padding:"10px 14px",background:"rgba(77,182,172,.08)",border:"1px solid #4db6ac44",borderRadius:8}}>
+            <span style={{fontSize:13,color:"#4db6ac",fontWeight:700}}>🧪 이름 테스트</span>
+            <input value={testName} onChange={e=>setTestName(e.target.value)} placeholder="거래처 이름 입력 (예: 아임웹영도경찰서)" style={{...inp,width:280}}/>
+            {testName.trim()&&(()=>{const r=classifyCustomer(testName,activeRules,FALLBACK);if(!CAT_BY[r.category])r.category=FALLBACK;return(
+              <span style={{fontSize:13}}>→ <CatDot c={r.category}/><b style={{color:CAT_COLOR[r.category]}}>{r.category}</b> · {r.channel} <span style={{color:"#8a9a88",fontSize:12}}>({r.rule?"「"+r.rule.keyword+"」 규칙":"규칙 없음"})</span></span>);})()}
+          </div>
+
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+              <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
+                {["순서","거래처 이름에","조건","구분","채널명 (비우면 거래처명)","사용",""].map(h=><th key={h} style={{...th,textAlign:"left"}}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {(rules||[]).map((r,i)=>{const ed=editRuleId===r.id;const off=r.active===false;return(
+                  <tr key={r.id} style={{opacity:off?.45:1}}>
+                    <td style={{...td,whiteSpace:"nowrap"}}>
+                      <button onClick={()=>moveRule(i,-1)} disabled={i===0} style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",borderRadius:4,color:"#a8b8a0",padding:"1px 7px",cursor:"pointer",opacity:i===0?.3:1,fontFamily:"inherit",marginRight:3}}>▲</button>
+                      <button onClick={()=>moveRule(i,1)} disabled={i===rules.length-1} style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",borderRadius:4,color:"#a8b8a0",padding:"1px 7px",cursor:"pointer",opacity:i===rules.length-1?.3:1,fontFamily:"inherit",marginRight:6}}>▼</button>
+                      <span style={{color:"#8a9a88"}}>{i+1}</span>
+                    </td>
+                    {ed?(<>
+                      <td style={td}><input autoFocus value={editRule.keyword} onChange={e=>setEditRule(x=>({...x,keyword:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&saveRule()} style={{...inp,width:140}}/></td>
+                      <td style={td}><select value={editRule.match_type} onChange={e=>setEditRule(x=>({...x,match_type:e.target.value}))} style={sel}>{SALES_MATCH_TYPES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></td>
+                      <td style={td}><select value={editRule.category} onChange={e=>setEditRule(x=>({...x,category:e.target.value}))} style={sel}>{CATS.map(c=><option key={c.key} value={c.key}>{c.key}</option>)}</select></td>
+                      <td style={td}><input value={editRule.channel||""} onChange={e=>setEditRule(x=>({...x,channel:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&saveRule()} placeholder="(거래처명)" style={{...inp,width:160}}/></td>
+                      <td style={td}></td>
+                      <td style={{...td,whiteSpace:"nowrap"}}><button onClick={saveRule} style={{...primaryBtn,fontSize:12,padding:"4px 12px"}}>저장</button> <button onClick={()=>setEditRuleId(null)} style={{...delBtn,fontSize:12}}>취소</button></td>
+                    </>):(<>
+                      <td style={{...td,fontWeight:700,color:"#f5c97a"}}>「{r.keyword}」</td>
+                      <td style={{...td,color:"#c8c8b8"}}>{SALES_MATCH_TYPES.find(m=>m[0]===r.match_type)?.[1]||"포함"}</td>
+                      <td style={{...td,whiteSpace:"nowrap"}}><CatDot c={r.category}/><b style={{color:CAT_COLOR[r.category]}}>{r.category}</b></td>
+                      <td style={{...td,color:r.channel?"#f0f0e8":"#7a8a78"}}>{r.channel||"(거래처명 그대로)"}</td>
+                      <td style={td}><button onClick={()=>toggleRule(i)} style={{...chip(!off,"#6fcf97"),padding:"2px 10px"}}>{off?"OFF":"ON"}</button></td>
+                      <td style={{...td,whiteSpace:"nowrap"}}>
+                        <button onClick={()=>{setEditRuleId(r.id);setEditRule({keyword:r.keyword,match_type:r.match_type||"contains",category:r.category,channel:r.channel||""});}} style={{background:"rgba(200,130,26,.2)",border:"1px solid #c8821a44",borderRadius:6,color:"#c8a06a",padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit",marginRight:6}}>✏️ 수정</button>
+                        <button onClick={()=>delRule(i)} style={{...delBtn,fontSize:12}}>✕</button>
+                      </td>
+                    </>)}
+                  </tr>);})}
+                <tr style={{background:"rgba(255,255,255,.03)"}}>
+                  <td style={{...td,color:"#8a9a88",fontSize:12}}>그 외</td>
+                  <td style={{...td,color:"#8a9a88"}} colSpan={2}>어떤 규칙에도 안 걸린 거래처</td>
+                  <td style={td}><CatDot c={FALLBACK}/><b style={{color:CAT_COLOR[FALLBACK]}}>{FALLBACK}</b></td>
+                  <td style={{...td,color:"#7a8a78"}}>(거래처명 그대로)</td><td style={td}></td><td style={td}></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* 새 규칙 */}
+          <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap",marginTop:14,padding:"12px 14px",background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:8}}>
+            <div><div style={lbl}>거래처 이름에 들어간 단어 *</div><input value={newRule.keyword} onChange={e=>setNewRule(r=>({...r,keyword:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addRule()} placeholder="예) 쿠팡" style={{...inp,width:150}}/></div>
+            <div><div style={lbl}>조건</div><select value={newRule.match_type} onChange={e=>setNewRule(r=>({...r,match_type:e.target.value}))} style={sel}>{SALES_MATCH_TYPES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></div>
+            <div><div style={lbl}>구분</div><select value={CAT_BY[newRule.category]?newRule.category:FALLBACK} onChange={e=>setNewRule(r=>({...r,category:e.target.value}))} style={sel}>{CATS.map(c=><option key={c.key} value={c.key}>{c.key}</option>)}</select></div>
+            <div><div style={lbl}>채널명 (선택)</div><input value={newRule.channel} onChange={e=>setNewRule(r=>({...r,channel:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addRule()} placeholder="예) 쿠팡" style={{...inp,width:150}}/></div>
+            <button onClick={addRule} style={primaryBtn}>+ 규칙 추가</button>
+            <button onClick={resetRules} style={{...delBtn,marginLeft:"auto",fontSize:12}}>↺ 기본 규칙으로 초기화</button>
+          </div>
+          <div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>※ 새 규칙은 맨 아래에 추가돼요. 다른 규칙보다 먼저 적용해야 하면 ▲로 올려주세요.</div>
+        </div>
+      )}
+
+      {/* ════ 엑셀 업로드 ════ */}
+      {view==="upload"&&(
+        <div>
+          <div style={{background:"rgba(255,255,255,.05)",border:"1px solid #7a8a7044",borderRadius:10,padding:"18px 20px",marginBottom:16}}>
+            <div style={{fontSize:15,fontWeight:700,color:"#c8ddb8",marginBottom:8}}>📤 ERP 판매현황집계 엑셀 올리기</div>
+            <div style={{fontSize:13,color:"#c8c8b8",lineHeight:1.8,marginBottom:14}}>
+              · ERP에서 받은 <b>판매현황집계</b> 엑셀을 그대로 올리면 돼요. (품목코드 · 거래처별 · 품목별 · 일별 · 수량)<br/>
+              · 중간의 「○○ 계」 소계 줄은 자동으로 빼고, 반품(마이너스 수량)은 판매에서 차감해요.<br/>
+              · <b style={{color:"#f5c97a"}}>제품마스터에 없는 품목은 자동으로 등록</b>해요. 등록된 품목은 <b>생산속도·BOM 설정 경고</b>가 떠요. (낱개 환산은 ERP 품목명의 "N개입"을 먼저 사용)<br/>
+              · 쇼핑백·포장 옵션 코드(예: DRB0071<b>B</b>)가 마스터에 없으면 기본 코드(DRB0071)로 합쳐서 저장해요.<br/>
+              · <b style={{color:"#f5c97a"}}>파일 기간(제목줄의 조회기간)에 이미 있는 데이터는 지우고 새로 저장</b>해요. 기간이 겹쳐도 중복 걱정 없어요.<br/>
+              · 거래처 분류는 저장하지 않고 <b>⚙️ 분류 규칙</b>으로 화면에서 계산해요.
+            </div>
+            <label style={{...primaryBtn,display:"inline-block",opacity:uploading?.6:1,pointerEvents:uploading?"none":"auto"}}>
+              {uploading?"⏳ 업로드 중...":"📂 엑셀 파일 선택"}
+              <input type="file" accept=".xlsx,.xls" onChange={handleUpload} style={{display:"none"}}/>
+            </label>
+          </div>
+          <div style={{fontSize:13,color:"#a8b8a0"}}>
+            {meta===null?"저장된 데이터 확인 중... (테이블이 없으면 최초 1회 SQL을 실행해주세요)":meta.empty?"아직 올린 판매 데이터가 없어요.":<>현재 저장된 판매 데이터: <b style={{color:"#f5c97a"}}>{meta.from} ~ {meta.to}</b></>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App(){
   const[user,setUser]=useState(null);
   const[authLoading,setAuthLoading]=useState(true);
@@ -1276,6 +2225,7 @@ function App(){
   const[sMaster,setSMaster]=useState([]);
   const[pMaster,setPMaster]=useState([]);
   const[bomData,setBomData]=useState([]);
+  const[bomLoaded,setBomLoaded]=useState(false);
   const[stock,setStock]=useState([]);
   const[orders,setOrders]=useState([]);
   const[prodLog,setProdLog]=useState([]);
@@ -1331,11 +2281,15 @@ function App(){
   // ── 분석2 (요일별 생산량 / 업체별 낱개) ──
   const[a2Metric,setA2Metric]=useState("unit"); // unit: 낱개 기준 / qty: 완제품 기준
   const[a2Mode,setA2Mode]=useState("avg");      // avg: 생산일 평균 / sum: 합계
-  const[a2SplitBulk,setA2SplitBulk]=useState(false); // 대량납품을 납품업체별로 분리해서 볼지
   // 분석2 전용 기간 (분석 탭과 별개, 마지막 조회 기간 기억) — 기본: 최근 3개월
   const[a2Range,setA2Range]=useState(()=>{try{const v=JSON.parse(localStorage.getItem("drip2_a2Range")||"null");if(v&&v.from&&v.to)return v;}catch{}return{from:addDays(today(),-90),to:today()};});
   const[a2Draft,setA2Draft]=useState(()=>({...a2Range}));
   const[a2Rows,setA2Rows]=useState([]);
+  // 분석2 세부탭: overview(요일·전체) / bych(업체별 추이) — 분석2에 들어올 때마다 항상 "요일·전체 현황"부터
+  const[a2View,setA2View]=useState("overview");
+  const[a2SelCh,setA2SelCh]=useState("__all__"); // __all__ = 업체 전체 비교
+  useEffect(()=>{if(tab==="분석2"){setA2View("overview");setA2SelCh("__all__");}},[tab]);
+  useEffect(()=>{try{localStorage.removeItem("drip2_a2View");}catch{}},[]); // 이전 버전에서 저장된 값 정리
   const[a2Loading,setA2Loading]=useState(false);
   const applyA2Range=(from,to)=>{
     if(!from||!to)return alert("시작일과 종료일을 모두 선택해주세요.");
@@ -1457,7 +2411,7 @@ function App(){
     if(sm){setSMaster(sm);setStockForm(f=>({...f,sCode:f.sCode&&sm.find(x=>x.code===f.sCode)?f.sCode:sm[0]?.code||""}));setNewComp(f=>({...f,sCode:f.sCode&&sm.find(x=>x.code===f.sCode)?f.sCode:sm[0]?.code||""}));}
     if(pm){setPMaster(pm);setOrderForm(f=>({...f,pCode:f.pCode&&pm.find(x=>x.code===f.pCode)?f.pCode:pm[0]?.code||""}));setBomPCode(p=>p&&pm.find(x=>x.code===p)?p:pm[0]?.code||"");}
   };
-  const loadBom=async()=>{const{data}=await sb.from("drip2_bom").select("*");if(data)setBomData(data);};
+  const loadBom=async()=>{const{data}=await sb.from("drip2_bom").select("*");if(data){setBomData(data);setBomLoaded(true);}};
   const sortStock=arr=>[...arr].sort((a,b)=>a.s_code.localeCompare(b.s_code)||new Date(a.expiry)-new Date(b.expiry));
   // ★ DB에서 최신 재고를 직접 조회 (다른 세션의 변경사항을 놓치지 않기 위함 — 로컬 state에 의존하지 않음)
   const fetchStock=async()=>{const{data}=await sb.from("drip2_stock").select("*");return data?sortStock(data):stock;};
@@ -1661,7 +2615,8 @@ function App(){
       ["생산 분석 요약"],
       ["조회기간",anaFrom+" ~ "+anaTo],
       ["생산일수",anaDays],
-      ["총 생산량(개)",anaTotalQty],
+      ["총 생산량(완제품, 개)",anaTotalQty],
+      ["총 생산량(낱개, 개)",anaTotalUnit],
       ["총 생산시간(시간)",Number(anaTotalProdHours.toFixed(2))],
       ["총 가용시간(시간)",anaTotalAvailHours],
       ["평균 가동률(%)",Number(anaUtilRate.toFixed(1))],
@@ -1789,6 +2744,23 @@ function App(){
   const pName=code=>pMaster.find(p=>p.code===code)?.name||code;
   const askPw=(title,desc,action)=>setPwModal({title,desc,action});
   const bomOf=pCode=>bomData.filter(b=>b.p_code===pCode);
+  // ── 설정이 덜 된 완제품 (사용중 + BOM 없음 또는 생산속도 없음) — 판매 엑셀 자동 등록 품목 등 ──
+  const setupNeeded=bomLoaded?pMaster.filter(p=>p.active!==false).map(p=>{
+    const noBom=!bomData.some(b=>b.p_code===p.code);
+    const noSpeed=!(Number(p.speed_sec)>0);
+    const m=String(p.name||"").match(/(\d+)\s*개입/)||String(p.name||"").match(/(\d+)\s*개(?!입)/);
+    return{code:p.code,name:p.name,noBom,noSpeed,hint:m?parseInt(m[1]):null};
+  }).filter(x=>x.noBom||x.noSpeed):[];
+  const setupMap=Object.fromEntries(setupNeeded.map(x=>[x.code,x]));
+  // 한 줄 안내 (제품마스터·BOM관리 탭 상단) — 자세한 건 각 행의 빨간 표시
+  const SetupBanner=({where})=>setupNeeded.length?(
+    <div style={{display:"flex",alignItems:"center",gap:8,background:"rgba(224,60,60,.12)",border:"1px solid #e0505066",borderRadius:8,padding:"8px 14px",marginBottom:14,fontSize:13,color:"#f0a0a0"}}>
+      <span style={{width:10,height:10,borderRadius:"50%",background:"#ff4d4d",boxShadow:"0 0 8px #ff4d4d",flexShrink:0}}/>
+      <b>수정할 제품이 {setupNeeded.length}개 있어요.</b>
+      <span style={{color:"#c8a0a0",fontSize:12}}>{where==="bom"?"목록에서 빨간 점이 있는 제품의 낱개 구성을 설정해주세요.":"빨간 표시가 있는 제품의 생산속도·BOM을 설정해주세요."}</span>
+    </div>
+  ):null;
+  const SetupDot=({title})=>(<span title={title} style={{display:"inline-block",width:9,height:9,borderRadius:"50%",background:"#ff4d4d",boxShadow:"0 0 6px #ff4d4d",flexShrink:0}}/>);
   // 낱개재고 요약: 제품별 그룹 (10번)
   const stockSummary=sMaster.map(s=>({...s,total:stock.filter(x=>x.s_code===s.code).reduce((a,b)=>a+b.qty,0)}));
   // 완제품생산 사이드바용: 소비기한 배치별로 그대로 표시 (0개 제외), 수량 적은순 정렬
@@ -2600,6 +3572,10 @@ function App(){
   const anaFrom=anaRange.from,anaTo=anaRange.to;
   const speedOf=code=>{const p=pMaster.find(x=>x.code===code);return p&&p.speed_sec?Number(p.speed_sec):0;};
   const anaTotalQty=anaRows.reduce((a,r)=>a+(r.qty||0),0);
+  // 낱개 환산 — 완제품 수량 × BOM 낱개 구성수
+  const anaUnitsOf=code=>bomOf(code).reduce((a,c)=>a+(c.qty||0),0);
+  const anaTotalUnit=anaRows.reduce((a,r)=>a+(r.qty||0)*anaUnitsOf(r.p_code),0);
+  const anaNoBom=[...new Set(anaRows.filter(r=>!anaUnitsOf(r.p_code)).map(r=>r.p_code))];
   const anaTotalProdHours=anaRows.reduce((a,r)=>a+secToHour((r.qty||0)*speedOf(r.p_code)),0);
   const anaPerHour=anaTotalProdHours>0?(anaTotalQty/anaTotalProdHours):0;
   // 날짜별 가용시간: 반드시 그 날짜에 저장된 값이 있어야 계산됨 (기본값 없음). 미입력이면 null.
@@ -2658,7 +3634,8 @@ function App(){
   // ══ 분석2: 요일별 생산량 + 업체별 낱개 (요일별) ══
   const A2_WD=[1,2,3,4,5,6,0]; // 월~일 순서
   const a2UnitsOf=code=>bomOf(code).reduce((a,c)=>a+(c.qty||0),0);
-  const a2Key=r=>(a2SplitBulk&&r.bulk_vendor)?(r.channel||"미입력")+" · "+r.bulk_vendor:(r.channel||"미입력");
+  // 분석은 출고업체 단위로만 집계 (대량납품은 납품업체명과 관계없이 "대량납품" 하나로 묶음)
+  const a2Key=r=>(r.channel||"미입력").trim()||"미입력";
   const a2Wd={};A2_WD.forEach(w=>{a2Wd[w]={days:new Set(),qty:0,unit:0,ch:{}};});
   const a2Ch={};   // {업체:{qty,unit,days:Set,wd:{w:{qty,unit}}}}
   const a2Date={}; // {날짜:{qty,unit,ch:{업체:{qty,unit}}}}
@@ -2703,6 +3680,22 @@ function App(){
   const a2DateChart=a2DateKeys.map(d=>({label:d.slice(5).replace("-","/"),sub:WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()],segs:a2ChKeys.map(k=>({key:k,name:k,value:a2Pick(a2Date[d].ch[k]),color:a2ChColor[k]}))}));
   // 업체×요일 히트맵 최대값
   const a2HeatMax=Math.max(1,...a2ChKeys.flatMap(k=>a2WdShow.map(w=>a2WdVal(w,a2Ch[k].wd[w]))));
+  // ── 업체별 추이 (세부탭) ──
+  const a2DateLbl=d=>({label:d.slice(5).replace("-","/"),sub:WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()]});
+  // 업체 하나의 일자별 막대 데이터 (x축은 전체 생산일로 맞춰서 업체끼리 비교 가능)
+  const a2ChDateChart=k=>a2DateKeys.map(d=>({...a2DateLbl(d),segs:[{key:k,name:k,value:a2Pick(a2Date[d].ch[k]),color:a2ChColor[k]}]}));
+  // 선택 업체의 제품별 생산 내역
+  const a2SelValid=a2SelCh!=="__all__"&&a2Ch[a2SelCh];
+  const a2SelProd=(()=>{
+    if(!a2SelValid)return[];
+    const m={};
+    a2Rows.forEach(r=>{if(a2Key(r)!==a2SelCh)return;const q=r.qty||0;
+      if(!m[r.p_code])m[r.p_code]={code:r.p_code,qty:0,unit:0,days:new Set()};
+      m[r.p_code].qty+=q;m[r.p_code].unit+=q*a2UnitsOf(r.p_code);m[r.p_code].days.add((r.plan_date||"").slice(0,10));});
+    return Object.values(m).sort((a,b)=>a2Pick(b)-a2Pick(a));
+  })();
+  const a2SelWdChart=a2SelValid?a2WdShow.map(w=>{const C=a2Ch[a2SelCh].wd[w];const n=a2Wd[w].days.size;const v=a2Pick(C);
+    return{label:WEEKDAY_KR[w],sub:n+"일",segs:[{key:a2SelCh,name:a2SelCh,value:a2Mode==="avg"?(n?v/n:0):v,color:a2ChColor[a2SelCh]}]};}):[];
 
   // 선택한 날짜의 낱개 포장량 근거 — 어떤 완제품을 몇 개 만들었고, 제품당 낱개가 몇 개 들어가는지
   const anaPackSelRows=anaPackSelDay?anaRows.filter(r=>(r.plan_date||"").slice(0,10)===anaPackSelDay):[];
@@ -2811,8 +3804,8 @@ function App(){
           );
         })()}
         <div style={{marginLeft:"auto",display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
-          {["낱개재고","완제품생산","BOM관리","제품마스터","생산로그","분석","분석2","추적","전광판","설정"].map(t=>(
-            <button key={t} onClick={()=>switchTab(t)} style={{padding:"5px 13px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,background:tab===t?(t==="전광판"?"#0d2a18":"#6a8a5a"):"rgba(255,255,255,.1)",color:tab===t?(t==="전광판"?"#00ff88":"#fff"):"#c8c8b8",fontWeight:tab===t?700:400,boxShadow:tab===t&&t==="전광판"?"0 0 8px rgba(0,255,136,.35)":"none"}}>{t==="전광판"?"📺 전광판":t==="분석"?"📊 분석":t==="분석2"?"📊 분석2":t==="추적"?"🔍 추적":t}</button>
+          {["낱개재고","완제품생산","BOM관리","제품마스터","생산로그","분석","분석2","판매추이","추적","전광판","설정"].map(t=>(
+            <button key={t} onClick={()=>switchTab(t)} style={{padding:"5px 13px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,background:tab===t?(t==="전광판"?"#0d2a18":"#6a8a5a"):"rgba(255,255,255,.1)",color:tab===t?(t==="전광판"?"#00ff88":"#fff"):"#c8c8b8",fontWeight:tab===t?700:400,boxShadow:tab===t&&t==="전광판"?"0 0 8px rgba(0,255,136,.35)":"none"}}>{t==="전광판"?"📺 전광판":t==="분석"?"📊 분석":t==="분석2"?"📊 분석2":t==="판매추이"?"🛒 판매추이":t==="추적"?"🔍 추적":t}{((t==="제품마스터"&&setupNeeded.length>0)||(t==="BOM관리"&&setupNeeded.some(x=>x.noBom)))&&<span title="수정할 제품이 있어요" style={{display:"inline-block",width:8,height:8,borderRadius:"50%",background:"#ff4d4d",boxShadow:"0 0 6px #ff4d4d",marginLeft:5,verticalAlign:"middle"}}/>}</button>
           ))}
           <div style={{marginLeft:6,display:"flex",alignItems:"center",gap:8,padding:"3px 10px",background:"rgba(255,255,255,.07)",borderRadius:20,border:"1px solid #6a8a5a44"}}>
             <span style={{fontSize:11,color:"#a8b8a0"}}>👤 {user.user_id}</span>
@@ -3531,6 +4524,7 @@ function App(){
         {tab==="BOM관리"&&(
           <div>
             <SecTitle icon="🔧" title="BOM (완제품 구성품) 관리"/>
+            <SetupBanner where="bom"/>
             <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
               {/* 왼쪽: 완제품 목록 */}
               <div style={{flex:"0 0 240px",minWidth:200}}>
@@ -3551,7 +4545,7 @@ function App(){
                         opacity:p.active===false?.6:1}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
                         <span style={{fontSize:10,color:"#9a7050",flexShrink:0}}>[{p.code}]</span>
-                        <span style={{color:"#8a6040",fontSize:11,flexShrink:0}}>{bomOf(p.code).length}개</span>
+                        <span style={{display:"flex",alignItems:"center",gap:5,color:setupMap[p.code]?.noBom?"#ff8080":"#8a6040",fontSize:11,flexShrink:0}}>{setupMap[p.code]?.noBom&&<SetupDot title="BOM 미설정"/>}{bomOf(p.code).length}개</span>
                       </div>
                       <div style={{fontSize:13,color:bomPCode===p.code?"#f5c97a":p.active===false?"#6a7a60":"#c8a06a",marginTop:3,wordBreak:"keep-all",lineHeight:1.4}}>
                         {p.name}
@@ -3592,6 +4586,7 @@ function App(){
         {/* ════ 제품마스터 ════ */}
         {tab==="제품마스터"&&(
           <div>
+            <SetupBanner where="master"/>
             <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
               <div style={{flex:1,minWidth:280}}>
                 <SecTitle icon="🏷" title="낱개 제품 코드 마스터"/>
@@ -3640,7 +4635,7 @@ function App(){
                     const isActive=p.active!==false;
                     const activeCount=arr.filter(x=>x.active!==false).length;
                     return(
-                      <div key={p.code} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",background:isActive?"rgba(255,255,255,.05)":"rgba(255,255,255,.02)",border:"1px solid "+(isActive?"#7a8a7044":"#5a5a5a33"),borderRadius:10,opacity:isActive?1:.6}}>
+                      <div key={p.code} id={"pm-row-"+p.code} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",background:setupMap[p.code]?"rgba(224,60,60,.10)":isActive?"rgba(255,255,255,.05)":"rgba(255,255,255,.02)",border:"1px solid "+(setupMap[p.code]?"#e05050aa":isActive?"#7a8a7044":"#5a5a5a33"),borderRadius:10,opacity:isActive?1:.6}}>
                         {/* 순서 버튼 + 순번 (활성 항목만 표시) */}
                         {isActive?(<>
                           <div style={{display:"flex",flexDirection:"column",gap:2,flexShrink:0}}>
@@ -3654,7 +4649,14 @@ function App(){
                         {/* 코드 */}
                         <span style={{color:"#c8821a",fontWeight:700,fontSize:13,flexShrink:0}}>{p.code}</span>
                         {/* 제품명 */}
-                        <span style={{flex:1,color:isActive?"#f5c97a":"#8a8a78",fontWeight:600,fontSize:14}}>{p.name}</span>
+                        <span style={{flex:1,color:isActive?"#f5c97a":"#8a8a78",fontWeight:600,fontSize:14}}>
+                          {p.name}
+                          {setupMap[p.code]&&(
+                            <span style={{display:"inline-flex",alignItems:"center",gap:5,marginLeft:8,fontSize:11,fontWeight:700,color:"#ff8080",background:"rgba(224,60,60,.15)",border:"1px solid #e0505066",borderRadius:10,padding:"1px 8px",verticalAlign:"middle"}}>
+                              <SetupDot/>수정 필요: {[setupMap[p.code].noSpeed?"생산속도":null,setupMap[p.code].noBom?"BOM":null].filter(Boolean).join("·")}
+                            </span>
+                          )}
+                        </span>
                         {/* 생산속도 (초/개) — 분석 탭용 */}
                         <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
                           <span style={{fontSize:11,color:"#8a9a88",whiteSpace:"nowrap"}}>⚡생산속도</span>
@@ -3795,7 +4797,8 @@ function App(){
 
             {/* KPI 카드 */}
             <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:24}}>
-              <KpiCard icon="📦" label="총 생산량" value={anaTotalQty.toLocaleString()+"개"}/>
+              <KpiCard icon="🎁" label="총 생산량 (완제품)" value={anaTotalQty.toLocaleString()+"개"}/>
+              <KpiCard icon="📦" label="총 생산량 (낱개)" value={anaTotalUnit.toLocaleString()+"개"} color="#4db6ac" sub={anaNoBom.length?("⚠️ BOM 미등록 "+anaNoBom.length+"종 제외"):(anaTotalQty?"완제품 1개당 평균 낱개 "+(anaTotalUnit/anaTotalQty).toFixed(1)+"개":"완제품 수량 × BOM 낱개 수")}/>
               <KpiCard icon="⏱" label="총 생산시간" value={anaTotalProdHours.toFixed(1)+"시간"} sub="생산수량 × 생산속도"/>
               <KpiCard icon="👥" label="총 가용시간" value={anaTotalAvailHours.toLocaleString()+"시간"} sub={"생산일("+anaDays+"일)별 작업자수×근무시간+연장근무 합산"}/>
               <KpiCard icon="📈" label="평균 가동률" value={anaUtilRate.toFixed(1)+"%"} color={anaUtilRate>=80?"#6fcf97":anaUtilRate>=50?"#f5c97a":"#e89090"}/>
@@ -4057,12 +5060,16 @@ function App(){
                   <button key={k} onClick={()=>setA2Mode(k)} style={{padding:"4px 12px",borderRadius:20,border:"1px solid "+(a2Mode===k?"#f5c97a":"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:a2Mode===k?"rgba(245,201,122,.15)":"rgba(255,255,255,.06)",color:a2Mode===k?"#f5c97a":"#c8c8b8",fontWeight:a2Mode===k?700:400}}>{l}</button>
                 ))}
               </div>
-              <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",color:"#c8c8b8"}}>
-                <input type="checkbox" checked={a2SplitBulk} onChange={e=>setA2SplitBulk(e.target.checked)} style={{accentColor:"#f2c94c",width:15,height:15}}/>
-                납품업체명 입력 건(대량납품 등)을 납품업체별로 나눠 보기
-              </label>
             </div>
 
+            {/* 세부탭 */}
+            <div style={{display:"flex",gap:0,marginBottom:20,borderBottom:"2px solid #6a8a5a33"}}>
+              {[["overview","📅 요일·전체 현황"],["bych","🏢 업체별 생산 추이"]].map(([k,l])=>(
+                <button key={k} onClick={()=>setA2View(k)} style={{padding:"9px 20px",border:"none",borderBottom:"3px solid "+(a2View===k?"#f5c97a":"transparent"),marginBottom:-2,background:"transparent",cursor:"pointer",fontFamily:"inherit",fontSize:14,fontWeight:a2View===k?700:400,color:a2View===k?"#f5c97a":"#a8b8a0"}}>{l}</button>
+              ))}
+            </div>
+
+            {a2View==="overview"&&(<>
             {/* KPI */}
             <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:24}}>
               <KpiCard icon="📦" label="총 낱개 생산" value={a2TotalUnit.toLocaleString()+"개"} color="#4db6ac"/>
@@ -4168,8 +5175,119 @@ function App(){
               <ChartLegend items={a2ChKeys.map(k=>({label:k,color:a2ChColor[k]}))}/>
               <StackedBarChart data={a2DateChart} unit="개" height={240}/>
             </div>
+            </>)}
+
+            {/* ════ 세부탭: 업체별 생산 추이 ════ */}
+            {a2View==="bych"&&(
+              <div>
+                {/* 업체 선택 */}
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:18,alignItems:"center"}}>
+                  <span style={{color:"#a8b8a0",fontWeight:700,fontSize:13,marginRight:4}}>업체</span>
+                  {[["__all__","전체 비교",null],...a2ChKeys.map(k=>[k,k,a2ChColor[k]])].map(([k,l,c])=>{const on=(a2SelValid?a2SelCh:"__all__")===k;return(
+                    <button key={k} onClick={()=>setA2SelCh(k)} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"5px 13px",borderRadius:20,border:"1px solid "+(on?(c||"#6a8a5a"):"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:on?"rgba(255,255,255,.12)":"rgba(255,255,255,.04)",color:on?"#fff":"#c8c8b8",fontWeight:on?700:400}}>
+                      {c&&<span style={{width:10,height:10,borderRadius:3,background:c,display:"inline-block"}}/>}{l}
+                    </button>);})}
+                </div>
+
+                {a2ChKeys.length===0&&<div style={{color:"#8a9a88",fontSize:13,textAlign:"center",padding:30}}>조회 기간에 생산완료 데이터가 없어요.</div>}
+
+                {/* ── 전체 비교: 업체마다 일자별 막대 따로 ── */}
+                {!a2SelValid&&a2ChKeys.length>0&&(<>
+                  {a2ChKeys.map(k=>{const C=a2Ch[k];const tot=a2Pick(C);const share=a2TotalPick?tot/a2TotalPick*100:0;return(
+                    <div key={k} style={{background:"rgba(255,255,255,.03)",border:"1px solid #7a8a7044",borderLeft:"4px solid "+a2ChColor[k],borderRadius:10,padding:"12px 16px",marginBottom:14}}>
+                      <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:6}}>
+                        <button onClick={()=>setA2SelCh(k)} title="이 업체 상세 보기" style={{background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit",fontSize:15,fontWeight:800,color:"#f0f0e8",display:"inline-flex",alignItems:"center",gap:7}}>
+                          <span style={{width:12,height:12,borderRadius:3,background:a2ChColor[k],display:"inline-block"}}/>{k} <span style={{fontSize:11,color:"#8a9a88",fontWeight:400}}>상세 ›</span>
+                        </button>
+                        <span style={{fontSize:13,color:"#f5c97a",fontWeight:700}}>합계 {a2Fmt(tot)}{a2Unit}</span>
+                        <span style={{fontSize:12,color:"#c8c8b8"}}>비중 {share.toFixed(1)}%</span>
+                        <span style={{fontSize:12,color:"#c8c8b8"}}>생산일 {C.days.size}일 / {a2ProdDays}일</span>
+                        <span style={{fontSize:12,color:"#c8c8b8"}}>생산일 평균 {C.days.size?a2Fmt(tot/C.days.size):0}개</span>
+                      </div>
+                      <StackedBarChart data={a2ChDateChart(k)} unit="개" height={170}/>
+                    </div>);})}
+
+                  {/* 날짜 × 업체 표 */}
+                  <div style={{marginTop:22}}>
+                    <SecTitle icon="🗓" title={"일자별 × 업체별 생산량 ("+(a2Metric==="unit"?"낱개":"완제품")+")"}/>
+                    <div style={{overflowX:"auto"}}>
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+                        <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
+                          <th style={{padding:"9px 12px",textAlign:"left",color:"#c8ddb8",whiteSpace:"nowrap",position:"sticky",left:0,background:"#4a3f30"}}>날짜</th>
+                          {a2ChKeys.map(k=><th key={k} style={{padding:"9px 12px",textAlign:"right",color:"#c8ddb8",whiteSpace:"nowrap"}}><span style={{display:"inline-block",width:9,height:9,borderRadius:2,background:a2ChColor[k],marginRight:5}}/>{k}</th>)}
+                          <th style={{padding:"9px 12px",textAlign:"right",color:"#f5c97a",whiteSpace:"nowrap"}}>합계</th>
+                        </tr></thead>
+                        <tbody>
+                          {[...a2DateKeys].reverse().map(d=>{const D=a2Date[d];const w=new Date(d+"T00:00:00Z").getUTCDay();const dayTot=a2Pick(D);return(
+                            <tr key={d}>
+                              <td style={{padding:"7px 12px",borderBottom:"1px solid #6a6a6444",whiteSpace:"nowrap",color:w===0?"#e89090":w===6?"#8ac8f0":"#e0e0d8",position:"sticky",left:0,background:"#353530"}}>{d.slice(5).replace("-","/")} ({WEEKDAY_KR[w]})</td>
+                              {a2ChKeys.map(k=>{const v=a2Pick(D.ch[k]);const pct=dayTot?v/dayTot*100:0;const a=v?0.10+0.6*(pct/100):0;return(
+                                <td key={k} style={{padding:"7px 12px",borderBottom:"1px solid #6a6a6444",textAlign:"right",fontFamily:"monospace",whiteSpace:"nowrap",background:v?`rgba(77,182,172,${a.toFixed(3)})`:"transparent",color:v?"#f0f0e8":"#5a6a58"}}>
+                                  {v?(<>{a2Fmt(v)} <span style={{fontSize:12,fontWeight:700,color:pct>=30?"#ffe08a":"#b8d8d0"}}>({pct.toFixed(1)}%)</span></>):"-"}
+                                </td>);})}
+                              <td style={{padding:"7px 12px",borderBottom:"1px solid #6a6a6444",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:"#f5c97a",whiteSpace:"nowrap"}}>{a2Fmt(dayTot)}</td>
+                            </tr>);})}
+                          <tr style={{background:"rgba(200,130,26,.15)"}}>
+                            <td style={{padding:"9px 12px",fontWeight:700,color:"#f5c97a",position:"sticky",left:0,background:"#4a3f30"}}>합계</td>
+                            {a2ChKeys.map(k=>{const v=a2Pick(a2Ch[k]);return(<td key={k} style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:"#f5c97a",whiteSpace:"nowrap"}}>{a2Fmt(v)} <span style={{fontSize:12,color:"#ffe08a"}}>({a2TotalPick?(v/a2TotalPick*100).toFixed(1):0}%)</span></td>);})}
+                            <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontWeight:800,color:"#f5c97a",whiteSpace:"nowrap"}}>{a2Fmt(a2TotalPick)}</td>
+                          </tr>
+                          <tr style={{background:"rgba(77,182,172,.08)"}}>
+                            <td style={{padding:"7px 12px",fontWeight:700,color:"#b8d8d0",position:"sticky",left:0,background:"#353530",whiteSpace:"nowrap"}}>일평균 비중</td>
+                            {a2ChKeys.map(k=>{const ps=a2DateKeys.map(d=>{const t=a2Pick(a2Date[d]);return t?a2Pick(a2Date[d].ch[k])/t*100:0;});const avg=ps.length?ps.reduce((a,b)=>a+b,0)/ps.length:0;return(
+                              <td key={k} style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:"#b8d8d0"}}>{avg.toFixed(1)}%</td>);})}
+                            <td style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",color:"#8a9a88"}}>-</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>※ 최근 날짜가 위에 있어요. 괄호 안 %는 <b>그날 전체 생산량 중 해당 업체 비중</b>이고, 진한 칸일수록 비중이 커요(30% 이상은 노란색). "일평균 비중"은 날짜별 비중을 단순 평균한 값이에요. 단위: {a2Unit}</div>
+                  </div>
+                </>)}
+
+                {/* ── 업체 하나 상세 ── */}
+                {a2SelValid&&(()=>{const k=a2SelCh,C=a2Ch[k],tot=a2Pick(C);
+                  const best=a2DateKeys.filter(d=>a2Pick(a2Date[d].ch[k])>0).sort((a,b)=>a2Pick(a2Date[b].ch[k])-a2Pick(a2Date[a].ch[k]))[0];
+                  return(<>
+                  <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:22}}>
+                    <KpiCard icon="🏢" label={k+" 합계"} value={a2Fmt(tot)+"개"} sub={a2Metric==="unit"?"낱개 기준":"완제품 기준"} color={a2ChColor[k]}/>
+                    <KpiCard icon="📊" label="전체 대비 비중" value={(a2TotalPick?tot/a2TotalPick*100:0).toFixed(1)+"%"}/>
+                    <KpiCard icon="📅" label="생산일수" value={C.days.size+"일"} sub={"전체 생산일 "+a2ProdDays+"일 중"}/>
+                    <KpiCard icon="⚖️" label="생산일 평균" value={(C.days.size?a2Fmt(tot/C.days.size):0)+"개"}/>
+                    <KpiCard icon="🏆" label="최다 생산일" value={best?best.slice(5).replace("-","/"):"-"} sub={best?a2Fmt(a2Pick(a2Date[best].ch[k]))+"개":""} color="#6fcf97"/>
+                  </div>
+                  <div style={{marginBottom:26}}>
+                    <SecTitle icon="📈" title={k+" 일자별 생산 추이 ("+(a2Metric==="unit"?"낱개":"완제품")+")"}/>
+                    <StackedBarChart data={a2ChDateChart(k)} unit="개" height={240}/>
+                  </div>
+                  <div style={{marginBottom:26}}>
+                    <SecTitle icon="📅" title={k+" 요일별 생산량 ("+(a2Mode==="avg"?"생산일 평균":"합계")+")"}/>
+                    <StackedBarChart data={a2SelWdChart} unit="개" height={200}/>
+                  </div>
+                  <div>
+                    <SecTitle icon="🎁" title={k+" 제품별 생산 내역"}/>
+                    <Tbl headers={["순위","제품코드","제품명","완제품 합계","낱개 합계","생산일수","비중"]}>
+                      {a2SelProd.map((p,i)=>(
+                        <tr key={p.code}>
+                          <Td>{i+1}</Td>
+                          <Td style={{color:"#9a7050",fontSize:12}}>{p.code}</Td>
+                          <Td style={{color:"#f5c97a",fontWeight:700}}>{pName(p.code)}</Td>
+                          <Td>{p.qty.toLocaleString()}개</Td>
+                          <Td style={{color:"#4db6ac",fontWeight:700}}>{p.unit.toLocaleString()}개</Td>
+                          <Td>{p.days.size}일</Td>
+                          <Td>{tot?(a2Pick(p)/tot*100).toFixed(1):0}%</Td>
+                        </tr>))}
+                      {a2SelProd.length===0&&<tr><Td colSpan={7} style={{textAlign:"center",color:"#8a9a88"}}>데이터가 없습니다.</Td></tr>}
+                    </Tbl>
+                  </div>
+                  </>);})()}
+              </div>
+            )}
           </div>
         )}
+
+        {/* ════ 판매추이 ════ */}
+        {tab==="판매추이"&&<SalesTrendTab sb={sb} pMaster={pMaster} bomData={bomData} askPw={askPw} user={user} onMasterChanged={loadMasters}/>}
 
         {/* ════ 추적 ════ */}
         {tab==="추적"&&(
