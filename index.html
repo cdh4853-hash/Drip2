@@ -29,7 +29,7 @@ select option { background: #2e2e2c; color: #f0ede8; }
 
 // ════════════════════════════════════════════
 // ★ 앱 버전 — 배포할 때마다 이 값만 바꾸면, 켜져 있는 모든 화면(전광판 등)이 10분 안에 자동 새로고침됨
-const APP_VERSION="2026-10-21-21";
+const APP_VERSION="2026-10-21-26";
 // 대량납품 업체 판별 (DB에 use_vendor 설정이 없을 때의 기본값 판단용)
 const BULK_CH="대량납품";
 const isBulkCh=name=>(name||"").trim()===BULK_CH;
@@ -1350,6 +1350,13 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
   const[prodCat,setProdCat]=useState("__all__");
   const[custQ,setCustQ]=useState("");
   const[custCat,setCustCat]=useState("__all__");
+  const[custSort,setCustSort]=useState("qty"); // qty 판매량순 / last 최근 판매일순
+  const[custOpen,setCustOpen]=useState({});   // 펼친 거래처 {이름:true}
+  // 집계 제외 목록 (거래처 전체 또는 특정 판매건) — 엑셀을 다시 올려도 유지됨
+  const[excl,setExcl]=useState([]);
+  const[exclErr,setExclErr]=useState(false);
+  const[exclOpen,setExclOpen]=useState(false);
+  const[custChk,setCustChk]=useState({}); // 일괄 제외용 체크 {거래처명:true}
   const[uploading,setUploading]=useState(false);
   const[meta,setMeta]=useState(null);    // 저장된 데이터 범위
   const[newRule,setNewRule]=useState({keyword:"",match_type:"contains",category:"플랫폼",channel:""});
@@ -1372,12 +1379,12 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
   const delBtn={background:"rgba(160,60,60,.25)",border:"1px solid #c0606044",color:"#e89090",borderRadius:6,padding:"4px 10px",fontSize:13,cursor:"pointer",fontFamily:"inherit"};
   const chip=(on,color)=>({display:"inline-flex",alignItems:"center",gap:6,padding:"4px 12px",borderRadius:20,border:"1px solid "+(on?(color||"#6a8a5a"):"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:on?"rgba(255,255,255,.12)":"rgba(255,255,255,.04)",color:on?"#fff":"#c8c8b8",fontWeight:on?700:400});
   const SecTitle=({icon,title,right})=>(<div style={{display:"flex",alignItems:"center",gap:8,fontSize:16,fontWeight:700,color:"#f5c97a",marginBottom:14,borderLeft:"3px solid #c8821a",paddingLeft:12}}>{icon} {title}{right&&<span style={{marginLeft:"auto"}}>{right}</span>}</div>);
-  const th={padding:"9px 12px",color:"#c8ddb8",fontWeight:600,fontSize:13,borderBottom:"1px solid #6a8a5a55",whiteSpace:"nowrap"};
-  const td={padding:"7px 12px",borderBottom:"1px solid #6a6a6444",verticalAlign:"middle"};
+  const th={padding:"8px 9px",color:"#c8ddb8",fontWeight:600,fontSize:12.5,borderBottom:"1px solid #6a8a5a55",whiteSpace:"nowrap"};
+  const td={padding:"6px 9px",borderBottom:"1px solid #6a6a6444",verticalAlign:"middle"};
   const num={...td,textAlign:"right",fontFamily:"monospace",whiteSpace:"nowrap"};
   const fmt=v=>Math.round(v||0).toLocaleString();
   const pct=(v,t)=>t?(v/t*100).toFixed(1):"0.0";
-  const Pct=({v,t,hi})=>(<span style={{fontSize:12,fontWeight:700,color:hi&&t&&v/t>=.3?"#ffe08a":"#a8c8c0"}}>({pct(v,t)}%)</span>);
+  const Pct=({v,t,hi})=>(<span style={{fontSize:11,fontWeight:700,color:hi&&t&&v/t>=.3?"#ffe08a":"#a8c8c0"}}>({pct(v,t)}%)</span>);
   // ── 구분 (DB 또는 기본값) ──
   const CATS=[...cats].sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)).map(c=>({...c,key:c.name,desc:c.description||""}));
   const CAT_COLOR=Object.fromEntries(CATS.map(c=>[c.key,c.color||"#888"]));
@@ -1417,7 +1424,12 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
     setCatsErr(false);
     if(data&&data.length){setCats(data);setCatsFromDb(true);}else setCatsFromDb(false);
   };
-  useEffect(()=>{loadRules();loadMeta();loadCats();},[]);
+  const loadExcl=async()=>{
+    const{data,error}=await sb.from("drip2_sales_excl").select("*").order("created_at",{ascending:false});
+    if(error){console.warn("판매 제외목록 조회 실패:",error.message);setExclErr(true);return;}
+    setExclErr(false);setExcl(data||[]);
+  };
+  useEffect(()=>{loadRules();loadMeta();loadCats();loadExcl();},[]);
   useEffect(()=>{loadRows(range.from,range.to);},[range.from,range.to]);
   const applyRange=(f,t)=>{if(!f||!t)return alert("기간을 선택하세요.");if(f>t)return alert("시작일이 종료일보다 늦어요.");setDraft({from:f,to:t});setRange({from:f,to:t});};
 
@@ -1441,12 +1453,20 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
   //  → 예) ERP "마티에드립백 1개 [부산]"은 낱개 1개씩 판매 (생산 BOM은 200개입 박스라 BOM으로 곱하면 200배가 됨)
   //  → 품목명에 개수가 없으면 BOM 낱개 구성수 사용
   const nameUnits=nm=>{const t=String(nm||"");const m=t.match(/(\d+)\s*개입/)||t.match(/(\d+)\s*개(?!입)/);const n=m?parseInt(m[1]):0;return n>0?n:0;};
-  const rowUnits=r=>nameUnits(r.p_name)||uOf(r.p_code);
-  const vRows=pMaster.length?rows.filter(r=>masterSet.has(r.p_code)):rows;
+  // 제품마스터에 직접 입력한 "판매 1개 = 낱개 N개"(sale_units)가 있으면 최우선
+  const saleUnitMap=Object.fromEntries(pMaster.filter(p=>Number(p.sale_units)>0).map(p=>[p.code,Number(p.sale_units)]));
+  const erpUnits=r=>saleUnitMap[r.p_code]||nameUnits(r.p_name);
+  const rowUnits=r=>erpUnits(r)||uOf(r.p_code);
+  // 제외: 거래처 전체(sale_date·p_code 없음) 또는 특정 판매건(날짜+제품+거래처)
+  const exclCust=new Set(excl.filter(x=>!x.sale_date&&!x.p_code).map(x=>salesNorm(x.customer)));
+  const exclLine=new Set(excl.filter(x=>x.sale_date&&x.p_code).map(x=>String(x.sale_date).slice(0,10)+"|"+x.p_code+"|"+salesNorm(x.customer)));
+  const isExcluded=r=>exclCust.has(salesNorm(r.customer))||exclLine.has(r.sale_date+"|"+r.p_code+"|"+salesNorm(r.customer));
+  const exRows=rows.filter(isExcluded);
+  const vRows=(pMaster.length?rows.filter(r=>masterSet.has(r.p_code)):rows).filter(r=>!isExcluded(r));
   const outRows=rows.length-vRows.length; // 예전에 올라간 마스터 외 품목 (집계 제외)
   const noBomCodes=[...new Set(vRows.filter(r=>!rowUnits(r)).map(r=>r.p_code))];
   // BOM과 ERP 판매단위가 다른 품목 (안내용)
-  const unitDiff=(()=>{const m={};vRows.forEach(r=>{const n=nameUnits(r.p_name),b=uOf(r.p_code);if(n&&b&&n!==b){m[r.p_code]=m[r.p_code]||{code:r.p_code,erp:n,bom:b};}});return Object.values(m);})();
+  const unitDiff=(()=>{const m={};vRows.forEach(r=>{const n=erpUnits(r),b=uOf(r.p_code);if(n&&b&&n!==b){m[r.p_code]=m[r.p_code]||{code:r.p_code,erp:n,bom:b};}});return Object.values(m);})();
   // 완제품 수량 = 생산 단위(박스) 기준으로 환산
   //  → ERP 판매단위와 BOM이 같으면 ERP 수량 그대로 (7개입 100개 = 100)
   //  → 다르면 낱개 ÷ BOM (★50개입: ERP 낱개 9,500개 = 190박스 / 마티에 200개입: 18,500개 = 92.5박스)
@@ -1454,7 +1474,7 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
   const valOf=r=>metric==="unit"?(r.qty||0)*rowUnits(r):qtyOf(r);
   const unitWord=metric==="unit"?"낱개":"완제품";
   // ERP에서 1개(낱개) 단위로 파는 품목(★50개입·마티에 등)은 완제품 기준에서 제외 — 낱개 기준에는 포함
-  const isSingle=r=>nameUnits(r.p_name)===1;
+  const isSingle=r=>erpUnits(r)===1;
   const singleCodes=[...new Set(vRows.filter(isSingle).map(r=>r.p_code))];
   const singleUnits=vRows.filter(isSingle).reduce((a,r)=>a+(r.qty||0),0);
   const totQtyAll=vRows.reduce((a,r)=>a+(isSingle(r)?0:qtyOf(r)),0);
@@ -1488,8 +1508,9 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
     B.prod[r.p_code]=B.prod[r.p_code]||{};B.prod[r.p_code][g]=(B.prod[r.p_code][g]||0)+q;
     if(!tot.prod[r.p_code])tot.prod[r.p_code]={code:r.p_code,name:pLabel(r.p_code,r.p_name),qty:0,cat:{},grp:{}};
     const P=tot.prod[r.p_code];P.qty+=q;P.cat[c.category]=(P.cat[c.category]||0)+q;P.grp[g]=(P.grp[g]||0)+q;
-    if(!tot.cust[r.customer])tot.cust[r.customer]={name:r.customer,qty:0,rows:0,...c};
-    tot.cust[r.customer].qty+=q;tot.cust[r.customer].rows++;
+    if(!tot.cust[r.customer])tot.cust[r.customer]={name:r.customer,qty:0,rows:0,...c,first:r.sale_date,last:r.sale_date,dates:new Set(),lines:[]};
+    const CU=tot.cust[r.customer];CU.qty+=q;CU.rows++;CU.dates.add(r.sale_date);CU.lines.push({d:r.sale_date,code:r.p_code,name:r.p_name,q});
+    if(r.sale_date<CU.first)CU.first=r.sale_date;if(r.sale_date>CU.last)CU.last=r.sale_date;
   });
   const buckets=Object.keys(tot.bucket).sort();
   const catOrder=CATS.map(c=>c.key);
@@ -1657,6 +1678,40 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
       setCats(base.filter(x=>x.id!==target.id));
     });
   };
+  // ── 집계 제외 (삭제 대신 — 엑셀 재업로드에도 유지) ──
+  const exclTableMsg="제외 목록 테이블(drip2_sales_excl)이 없어요.\nSupabase SQL Editor에서 최초 1회 SQL을 실행해주세요.";
+  const addExcl=(payload,label)=>{
+    if(exclErr)return alert(exclTableMsg);
+    askPw("판매 데이터 제외",label+"\n\n판매추이 집계에서 빠져요. (엑셀을 다시 올려도 계속 제외 · '제외 목록'에서 되돌리기 가능)",async()=>{
+      const{data,error}=await sb.from("drip2_sales_excl").insert({...payload,created_by:user?.name||user?.user_id||null}).select().single();
+      if(error)return alert("제외 오류: "+error.message);
+      setExcl(prev=>[data,...prev]);
+    });
+  };
+  // 체크한 거래처 한 번에 제외
+  const addExclBulk=names=>{
+    if(exclErr)return alert(exclTableMsg);
+    if(!names.length)return alert("제외할 거래처를 체크해주세요.");
+    askPw("판매 데이터 일괄 제외","거래처 "+names.length+"곳 전체를 집계에서 빼요.\n("+names.slice(0,6).join(", ")+(names.length>6?" 외 "+(names.length-6)+"곳":"")+")\n\n엑셀을 다시 올려도 계속 제외 · '제외 목록'에서 되돌리기 가능",async()=>{
+      const by=user?.name||user?.user_id||null;
+      const{data,error}=await sb.from("drip2_sales_excl").insert(names.map(n=>({customer:n,sale_date:null,p_code:null,note:"거래처 전체",created_by:by}))).select();
+      if(error)return alert("제외 오류: "+error.message);
+      setExcl(prev=>[...(data||[]),...prev]);setCustChk({});
+    });
+  };
+  const delExclAll=()=>{
+    if(!excl.length)return;
+    askPw("제외 목록 전체 되돌리기","제외한 "+excl.length+"개 항목을 모두 다시 집계에 넣어요.",async()=>{
+      const{error}=await sb.from("drip2_sales_excl").delete().in("id",excl.map(x=>x.id));
+      if(error)return alert("되돌리기 오류: "+error.message);
+      setExcl([]);
+    });
+  };
+  const delExcl=async(x)=>{
+    const{error}=await sb.from("drip2_sales_excl").delete().eq("id",x.id);
+    if(error)return alert("되돌리기 오류: "+error.message);
+    setExcl(prev=>prev.filter(y=>y.id!==x.id));
+  };
   const resetRules=()=>askPw("기본 규칙으로 초기화","지금 규칙을 모두 지우고 기본 규칙("+DEFAULT_SALES_RULES.length+"개)으로 되돌립니다.",async()=>{
     if(rulesErr)return needTable();
     const{error:e1}=await sb.from("drip2_sales_rules").delete().gte("id",0);
@@ -1769,6 +1824,26 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
       if(!window.confirm("📤 판매현황 업로드\n\n기간: "+from+" ~ "+to+"\n저장: "+out.length.toLocaleString()+"건 / 순수량: "+totalQty.toLocaleString()+"개"+diffMsg+delWarn+regMsg+mapMsg+exclMsg+noBomMsg+"\n\n이 기간에 이미 있는 판매 데이터는 지우고 새로 저장해요. 진행할까요?")){setUploading(false);return;}
       // 신규 제품 자동 등록 (확인 후)
       const regCodes=Object.keys(newReg);
+      // 낱개 수를 알 수 없는 품목 (품목명에 N개입 없음 + BOM 없음 + 판매단위 미입력) → 직접 물어보기
+      const askUnits=async()=>{
+        const unk={};
+        out.forEach(r=>{
+          if(saleUnitMap[r.p_code]||uOf(r.p_code))return;
+          if(!unk[r.p_code])unk[r.p_code]={names:new Set(),qty:0,named:false};
+          const U=unk[r.p_code];U.qty+=r.qty;if(r.p_name)U.names.add(r.p_name);if(nameUnits(r.p_name))U.named=true;
+        });
+        const targets=Object.entries(unk).filter(([c,u])=>!u.named);
+        if(!targets.length)return;
+        if(!window.confirm("❓ 낱개 수를 알 수 없는 품목이 "+targets.length+"종 있어요.\n(품목명에 'N개입'이 없고 BOM도 없음)\n\n"+targets.slice(0,10).map(([c,u])=>"· "+c+" "+[...u.names][0]).join("\n")+(targets.length>10?"\n· 외 "+(targets.length-10)+"종":"")+"\n\n지금 하나씩 입력할까요? (취소하면 나중에 제품마스터에서 입력)"))return;
+        for(const[c,u] of targets){
+          const ans=window.prompt("["+c+"] "+[...u.names][0]+"\n판매 수량 "+u.qty.toLocaleString()+"개\n\n판매 1개에 낱개 드립백이 몇 개 들어있나요?\n(숫자만 · 모르면 비워두고 확인)","");
+          if(ans===null)break; // 취소 → 나머지는 건너뜀
+          const n=parseInt(String(ans).replace(/[^0-9]/g,""));
+          if(!(n>0))continue;
+          const{error}=await sb.from("drip2_product_master").update({sale_units:n}).eq("code",c);
+          if(error){alert("판매단위 저장 오류: "+error.message+(/sale_units/.test(error.message)?"\n\n(최초 1회 SQL 실행이 필요해요)":""));break;}
+        }
+      };
       const doRegister=async()=>{
         if(!regCodes.length)return true;
         const{data:exist,error:e0}=await sb.from("drip2_product_master").select("code,sort_order").in("code",regCodes);
@@ -1783,7 +1858,8 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
       };
       if(bigDelete&&!window.confirm("🚨 한 번 더 확인할게요.\n\n기존 "+dDel.toLocaleString()+"건("+qDel.toLocaleString()+"개)이 지워져요.\n전체 조건으로 뽑은 ERP 파일이 맞나요?")){setUploading(false);return;}
       if(!(await doRegister())){setUploading(false);return;}
-      if(regCodes.length&&onMasterChanged)await onMasterChanged();
+      await askUnits();
+      if(onMasterChanged)await onMasterChanged();
       const{error}=await sb.rpc("drip2_sales_replace",{p_from:from,p_to:to,p_rows:out});
       setUploading(false);
       if(error)return alert("업로드 오류: "+error.message+(/function|does not exist|schema cache/i.test(error.message)?"\n\n(최초 1회 SQL 실행이 필요해요)":""));
@@ -1892,7 +1968,7 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
         <div style={{marginBottom:24}}>
           <SecTitle icon="🗓" title={(catSel==="__all__"?"기간별 × "+allLabel:g4?"기간별 × 구분":"기간별 × "+catSel+" 채널별")+" 판매량 ("+unitWord+")"}/>
           <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
               <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
                 <th style={{...th,textAlign:"left",position:"sticky",left:0,background:"#4a3f30"}}>기간</th>
                 {(isAll?allKeys.map(k=>({k,l:k,c:allColor[k]})):[...chTop.map(x=>({k:x.cat+"|"+x.ch,l:x.ch,c:chColor[x.cat+"|"+x.ch]})),...(chRest.length?[{k:"etc",l:"기타 "+chRest.length+"곳",c:"#5a6a5a"}]:[])]).map(x=>(
@@ -1927,7 +2003,7 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
         <div style={{marginBottom:10}}>
           <SecTitle icon="🏆" title={(isAll?"전체":catSel)+" 채널별 판매 순위 ("+unitWord+")"}/>
           <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
               <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
                 {["순위","구분","채널","거래처 수","판매량","비중"].map((h,i)=><th key={h} style={{...th,textAlign:i>=3?"right":"left"}}>{h}</th>)}
               </tr></thead>
@@ -1996,7 +2072,7 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
 
           <SecTitle icon="🎁" title={"제품별 판매량 ("+(prodCat==="__all__"?"전체":prodCat)+" · "+unitWord+")"}/>
           <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
               <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
                 <th style={{...th,textAlign:"left",position:"sticky",left:0,zIndex:2,background:"#4a3f30",minWidth:280}}>순위 · 제품</th>
                 {pCols.map(k=><th key={k} style={{...th,textAlign:"right"}}><span style={{display:"inline-block",width:9,height:9,borderRadius:2,background:grpColor[k],marginRight:5}}/>{k}</th>)}
@@ -2029,34 +2105,95 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
       {/* ════ 거래처 분류 확인 ════ */}
       {view==="customer"&&(()=>{
         const q=salesNorm(custQ);
-        const list=Object.values(tot.cust).filter(c=>(custCat==="__all__"||c.category===custCat)&&(!q||salesNorm(c.name).includes(q)||salesNorm(c.channel).includes(q))).sort((a,b)=>b.qty-a.qty);
+        const list=Object.values(tot.cust).filter(c=>(custCat==="__all__"||c.category===custCat)&&(!q||salesNorm(c.name).includes(q)||salesNorm(c.channel).includes(q))).sort((a,b)=>custSort==="last"?(b.last.localeCompare(a.last)||b.qty-a.qty):b.qty-a.qty);
+        const dLbl=d=>{const w=new Date(d+"T00:00:00Z").getUTCDay();return d.slice(2).replace(/-/g,".")+" ("+WEEKDAY_KR[w]+")";};
+        const shown=list.slice(0,500);
+        const chkNames=Object.keys(custChk).filter(n=>custChk[n]&&tot.cust[n]);
         const cnt={};Object.values(tot.cust).forEach(c=>{cnt[c.category]=(cnt[c.category]||0)+1;});
         return(<>
-          <div style={{fontSize:12,color:"#a8b8a0",marginBottom:12,lineHeight:1.6}}>조회 기간에 나온 거래처가 어떤 규칙으로 분류됐는지 확인하는 화면이에요. 잘못 분류된 이름이 있으면 <b style={{color:"#f5c97a"}}>⚙️ 분류 규칙</b>에서 단어를 추가하거나 순서를 바꿔주세요. (규칙에 안 걸린 거래처는 자동으로 <b>{FALLBACK}</b>)</div>
+          <div style={{fontSize:12,color:"#a8b8a0",marginBottom:12,lineHeight:1.6}}>조회 기간에 나온 거래처가 어떤 규칙으로 분류됐는지 확인하는 화면이에요. 거래처를 누르면 <b style={{color:"#f5c97a"}}>날짜별 판매 내역</b>이 펼쳐져요. 집계에서 빼고 싶으면 <b style={{color:"#e8a0a0"}}>🚫 제외</b>(거래처 전체) 또는 내역의 🚫(그 판매건만)를 눌러주세요. 잘못 분류된 이름이 있으면 <b style={{color:"#f5c97a"}}>⚙️ 분류 규칙</b>에서 단어를 추가하거나 순서를 바꿔주세요. (규칙에 안 걸린 거래처는 자동으로 <b>{FALLBACK}</b>)</div>
           <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:14}}>
             <input value={custQ} onChange={e=>setCustQ(e.target.value)} placeholder="🔍 거래처 이름 검색" style={{...inp,width:220}}/>
+            <span style={{color:"#a8b8a0",fontWeight:700,fontSize:13,marginLeft:4}}>정렬</span>
+            {[["qty","판매량순"],["last","최근 판매일순"]].map(([k,l])=>(<button key={k} onClick={()=>setCustSort(k)} style={chip(custSort===k,"#f5c97a")}>{l}</button>))}
+            <span style={{width:1,height:20,background:"#7a8a7044",margin:"0 4px"}}/>
             <button onClick={()=>setCustCat("__all__")} style={chip(custCat==="__all__")}>전체 {Object.keys(tot.cust).length}</button>
             {CATS.map(c=>(<button key={c.key} onClick={()=>setCustCat(c.key)} style={chip(custCat===c.key,c.color)}><span style={{width:10,height:10,borderRadius:3,background:c.color,display:"inline-block"}}/>{c.key} {cnt[c.key]||0}</button>))}
           </div>
+          {/* 일괄 제외 바 */}
+          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:8,padding:"8px 12px",background:chkNames.length?"rgba(224,80,80,.12)":"rgba(255,255,255,.03)",border:"1px solid "+(chkNames.length?"#e0505066":"#7a8a7033"),borderRadius:8,fontSize:13}}>
+            <span style={{color:chkNames.length?"#f0a0a0":"#8a9a88"}}>{chkNames.length?<>☑ <b>{chkNames.length}곳</b> 선택 · {fmt(chkNames.reduce((a,n)=>a+tot.cust[n].qty,0))}개</>:"체크박스로 여러 거래처를 고른 뒤 한 번에 제외할 수 있어요. (맨 위 체크 = 보이는 목록 전체 · 검색·구분과 같이 쓰면 편해요)"}</span>
+            {chkNames.length>0&&<>
+              <button onClick={()=>addExclBulk(chkNames)} style={{...delBtn,fontWeight:700}}>🚫 선택 {chkNames.length}곳 제외</button>
+              <button onClick={()=>setCustChk({})} style={{background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",color:"#c8c8b8",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>선택 해제</button>
+            </>}
+          </div>
           <div style={{overflowX:"auto",maxHeight:600,overflowY:"auto",border:"1px solid #c8821a33",borderRadius:6}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,background:"rgba(255,255,255,.03)"}}>
               <thead><tr style={{background:"#4a3f30",position:"sticky",top:0,zIndex:1}}>
-                {["거래처명 (ERP)","구분","채널","적용 규칙","건수","판매량"].map((h,i)=><th key={h} style={{...th,textAlign:i>=4?"right":"left"}}>{h}</th>)}
+                <th style={{...th,width:28}}><input type="checkbox" title="보이는 거래처 전체 선택" checked={shown.length>0&&shown.every(c=>custChk[c.name])} onChange={e=>{const v=e.target.checked;setCustChk(o=>{const n={...o};shown.forEach(c=>{if(v)n[c.name]=true;else delete n[c.name];});return n;});}} style={{cursor:"pointer",accentColor:"#e05050"}}/></th>
+                {["거래처명 (ERP)","구분","채널","적용 규칙","최근 판매일","첫 판매일","판매일수","건수","판매량",""].map((h,i)=><th key={h||"act"} style={{...th,textAlign:i>=6&&i<9?"right":"left"}}>{h}</th>)}
               </tr></thead>
               <tbody>
-                {list.slice(0,500).map(c=>(<tr key={c.name}>
-                  <td style={{...td,color:"#f0f0e8",wordBreak:"keep-all"}}>{c.name}</td>
+                {shown.map(c=>{const open=!!custOpen[c.name];const chk=!!custChk[c.name];return(<React.Fragment key={c.name}>
+                <tr onClick={()=>setCustOpen(o=>({...o,[c.name]:!o[c.name]}))} style={{cursor:"pointer",background:chk?"rgba(224,80,80,.12)":open?"rgba(200,130,26,.12)":"transparent"}}>
+                  <td style={{...td,width:28}} onClick={e=>e.stopPropagation()}><input type="checkbox" checked={chk} onChange={e=>{const v=e.target.checked;setCustChk(o=>{const n={...o};if(v)n[c.name]=true;else delete n[c.name];return n;});}} style={{cursor:"pointer",accentColor:"#e05050"}}/></td>
+                  <td style={{...td,color:"#f0f0e8",wordBreak:"keep-all"}}><span style={{display:"inline-block",width:14,color:"#c8a06a",fontSize:11}}>{open?"▼":"▶"}</span>{c.name}</td>
                   <td style={{...td,whiteSpace:"nowrap"}}><CatDot c={c.category}/>{c.category}</td>
                   <td style={{...td,wordBreak:"keep-all"}}>{c.channel}</td>
                   <td style={{...td,fontSize:12,color:c.rule?"#c8a06a":"#7a8a78"}}>{c.rule?"「"+c.rule.keyword+"」 "+(SALES_MATCH_TYPES.find(m=>m[0]===c.rule.match_type)?.[1]||""):"규칙 없음 → "+FALLBACK}</td>
+                  <td style={{...td,whiteSpace:"nowrap",color:"#f5c97a",fontFamily:"monospace"}}>{dLbl(c.last)}</td>
+                  <td style={{...td,whiteSpace:"nowrap",color:"#a8b8a0",fontFamily:"monospace"}}>{c.first!==c.last?dLbl(c.first):"-"}</td>
+                  <td style={num}>{c.dates.size.toLocaleString()}일</td>
                   <td style={num}>{c.rows.toLocaleString()}</td>
                   <td style={{...num,fontWeight:700,color:c.qty<0?"#e89090":"#4db6ac"}}>{fmt(c.qty)}개</td>
-                </tr>))}
-                {!list.length&&<tr><td colSpan={6} style={{...td,textAlign:"center",color:"#8a9a88",padding:24}}>해당하는 거래처가 없어요.</td></tr>}
+                  <td style={{...td,whiteSpace:"nowrap"}}><button onClick={e=>{e.stopPropagation();addExcl({customer:c.name,sale_date:null,p_code:null,note:"거래처 전체"},"「"+c.name+"」 거래처 전체 ("+c.rows+"건)");}} title="이 거래처 전체를 집계에서 제외" style={{...delBtn,fontSize:11,padding:"2px 8px"}}>🚫 제외</button></td>
+                </tr>
+                {open&&(
+                  <tr><td colSpan={11} style={{padding:"4px 10px 10px 34px",background:"rgba(0,0,0,.18)",borderBottom:"1px solid #6a6a6444"}}>
+                    <table style={{borderCollapse:"collapse",fontSize:12,minWidth:420}}>
+                      <thead><tr>{["판매일","제품","수량",""].map((h,i)=><th key={h||"a"} style={{padding:"4px 10px",color:"#a8b8a0",fontWeight:600,textAlign:i===2?"right":"left",borderBottom:"1px solid #6a6a6444"}}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {[...c.lines].sort((a,b)=>b.d.localeCompare(a.d)||b.q-a.q).map((l,i)=>(
+                          <tr key={i}>
+                            <td style={{padding:"3px 10px",whiteSpace:"nowrap",fontFamily:"monospace",color:"#f5c97a"}}>{dLbl(l.d)}</td>
+                            <td style={{padding:"3px 10px",wordBreak:"keep-all"}}><span style={{color:"#9a7050",marginRight:6}}>{l.code}</span>{pLabel(l.code,l.name)}</td>
+                            <td style={{padding:"3px 10px",textAlign:"right",fontFamily:"monospace",color:l.q<0?"#e89090":"#e8f0e0"}}>{fmt(l.q)}개</td>
+                            <td style={{padding:"3px 10px"}}><button onClick={()=>addExcl({customer:c.name,sale_date:l.d,p_code:l.code,note:"판매건"},"「"+c.name+"」 "+l.d+" "+pLabel(l.code,l.name)+" 판매건")} title="이 판매건만 집계에서 제외" style={{...delBtn,fontSize:11,padding:"1px 7px"}}>🚫</button></td>
+                          </tr>))}
+                      </tbody>
+                    </table>
+                  </td></tr>
+                )}
+                </React.Fragment>);})}
+                {!list.length&&<tr><td colSpan={11} style={{...td,textAlign:"center",color:"#8a9a88",padding:24}}>해당하는 거래처가 없어요.</td></tr>}
               </tbody>
             </table>
           </div>
           {list.length>500&&<div style={{marginTop:6,fontSize:11,color:"#8a9a88"}}>※ 판매량 상위 500곳만 표시돼요. 검색으로 좁혀보세요. (전체 {list.length.toLocaleString()}곳)</div>}
+          {/* 제외 목록 */}
+          <div style={{marginTop:18,background:"rgba(160,60,60,.08)",border:"1px solid #c0606044",borderRadius:10,padding:"10px 14px"}}>
+            <div onClick={()=>setExclOpen(o=>!o)} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:8,fontSize:14,fontWeight:700,color:"#e8a0a0"}}>
+              <span style={{fontSize:11}}>{exclOpen?"▼":"▶"}</span>🚫 집계 제외 목록 {excl.length}개
+              <span style={{fontWeight:400,fontSize:12,color:"#a88888"}}>· 이 기간 제외된 판매 {exRows.length.toLocaleString()}건 ({fmt(exRows.reduce((a,r)=>a+(r.qty||0),0))}개, ERP 수량)</span>
+            </div>
+            {exclErr&&<div style={{marginTop:6,fontSize:12,color:"#f0a0a0"}}>⚠️ 제외 목록 테이블이 아직 없어요. 최초 1회 SQL을 실행해주세요.</div>}
+            {exclOpen&&(
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,marginTop:10}}>
+                <thead><tr>{["거래처","범위","등록",""].map((h,i)=><th key={i} style={{...th,textAlign:"left"}}>{h}</th>)}<th style={{...th,textAlign:"left"}}>{excl.length>1&&<button onClick={delExclAll} style={{background:"rgba(90,130,200,.2)",border:"1px solid #5a8fc055",color:"#8ac8d8",borderRadius:6,padding:"2px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>↩ 전체 되돌리기</button>}</th></tr></thead>
+                <tbody>
+                  {excl.map(x=>(<tr key={x.id}>
+                    <td style={{...td,color:"#f0f0e8",wordBreak:"keep-all"}}>{x.customer}</td>
+                    <td style={{...td,color:"#c8a06a"}}>{x.sale_date?String(x.sale_date).slice(0,10)+" · "+x.p_code+" "+pLabel(x.p_code):"거래처 전체"}</td>
+                    <td style={{...td,color:"#8a9a88",fontSize:11,whiteSpace:"nowrap"}}>{String(x.created_at||"").slice(0,10)} {x.created_by||""}</td>
+                    <td style={td}></td>
+                    <td style={{...td,whiteSpace:"nowrap"}}><button onClick={()=>delExcl(x)} style={{background:"rgba(90,130,200,.2)",border:"1px solid #5a8fc055",color:"#8ac8d8",borderRadius:6,padding:"2px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>↩ 되돌리기</button></td>
+                  </tr>))}
+                  {!excl.length&&<tr><td colSpan={5} style={{...td,color:"#8a9a88",textAlign:"center"}}>제외된 항목이 없어요.</td></tr>}
+                </tbody>
+              </table>
+            )}
+          </div>
         </>);
       })()}
 
@@ -2131,7 +2268,7 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
           </div>
 
           <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
               <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
                 {["순서","거래처 이름에","조건","구분","채널명 (비우면 거래처명)","사용",""].map(h=><th key={h} style={{...th,textAlign:"left"}}>{h}</th>)}
               </tr></thead>
@@ -3293,6 +3430,15 @@ function App(){
   };
   const movePMasterTo=(code,pos)=>reorderMaster("drip2_product_master",pMaster.filter(p=>p.active!==false),setPMaster,code,pos);
   // 생산속도(초/개) — 분석 탭 전용, 완제품 마스터에 저장
+  // 판매단위: ERP 판매 1개 = 낱개 N개 (판매추이 낱개 환산용, 0이면 미사용)
+  const updatePSaleUnits=async(code,val)=>{
+    const num=parseInt(val);
+    if(isNaN(num)||num<0)return;
+    const v=num>0?num:null;
+    const{error}=await sb.from("drip2_product_master").update({sale_units:v}).eq("code",code);
+    if(error)return alert("판매단위 저장 오류: "+error.message+(/sale_units/.test(error.message)?"\n\n(최초 1회 SQL 실행이 필요해요)":""));
+    setPMaster(prev=>prev.map(p=>p.code===code?{...p,sale_units:v}:p));
+  };
   const updatePSpeed=async(code,val)=>{
     const num=parseFloat(val);
     if(isNaN(num)||num<0)return;
@@ -3929,7 +4075,7 @@ function App(){
         </div>
       )}
 
-      <div style={{padding:"18px 20px",maxWidth:1300,margin:"0 auto",display:tab==="전광판"?"none":"block"}}>
+      <div style={{padding:"18px 20px",maxWidth:tab==="판매추이"?1680:1300,margin:"0 auto",display:tab==="전광판"?"none":"block"}}>
 
         {/* ════ 낱개재고 ════ */}
         {tab==="낱개재고"&&(
@@ -4662,6 +4808,12 @@ function App(){
                           <span style={{fontSize:11,color:"#8a9a88",whiteSpace:"nowrap"}}>⚡생산속도</span>
                           <StockQtyInput id={p.code} initQty={p.speed_sec??0} onSave={updatePSpeed}/>
                           <span style={{fontSize:11,color:"#8a9a88"}}>초/개</span>
+                        </div>
+                        {/* 판매단위 (ERP 판매 1개 = 낱개 N개) — 판매추이 낱개 환산용 */}
+                        <div title={"ERP 판매 1개에 낱개가 몇 개인지 (판매추이 낱개 계산용)\n비워두면(0) 품목명의 'N개입' → BOM 순서로 사용"} style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+                          <span style={{fontSize:11,color:"#8a9a88",whiteSpace:"nowrap"}}>🛒판매1개=</span>
+                          <StockQtyInput id={p.code} initQty={p.sale_units??0} onSave={updatePSaleUnits}/>
+                          <span style={{fontSize:11,color:"#8a9a88"}}>낱개</span>
                         </div>
                         {/* BOM */}
                         <span style={{color:"#c8a06a",fontSize:12,flexShrink:0}}>{bomOf(p.code).length}개</span>
