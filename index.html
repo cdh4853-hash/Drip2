@@ -29,7 +29,7 @@ select option { background: #2e2e2c; color: #f0ede8; }
 
 // ════════════════════════════════════════════
 // ★ 앱 버전 — 배포할 때마다 이 값만 바꾸면, 켜져 있는 모든 화면(전광판 등)이 10분 안에 자동 새로고침됨
-const APP_VERSION="2026-10-22-3";
+const APP_VERSION="2026-11-02-6";
 // 대량납품 업체 판별 (DB에 use_vendor 설정이 없을 때의 기본값 판단용)
 const BULK_CH="대량납품";
 const isBulkCh=name=>(name||"").trim()===BULK_CH;
@@ -74,6 +74,15 @@ const buildShipFields=(ch,v)=>{
   };
 };
 const fmtShipDate=d=>d?String(d).slice(0,10):"";
+// ── 취소·복귀·처리 이력 구분 (drip2_action_log.action)
+const ACT_COLOR={"투입회수":"#8ac8d8","생산계획 복귀":"#8ac8d8","생산확정 복귀":"#a0b8f0","생산취소":"#ff9090","주문삭제":"#f08080","생산로그 삭제":"#e0a0a0","ERP 입력 완료":"#8ac8f0","ERP 입력 취소":"#f0b070","창고이동 완료":"#8edfb8","창고이동 취소":"#f0b070"};
+const ACT_GROUPS={"취소·복귀":["투입회수","생산계획 복귀","생산확정 복귀","생산취소","주문삭제","생산로그 삭제"],"ERP·창고처리":["ERP 입력 완료","ERP 입력 취소","창고이동 완료","창고이동 취소"]};
+// 창고이동 처리는 2026-11-03 생산분부터 적용 (이전 생산분은 대상 아님)
+const WH_START="2026-11-03";
+const whNeed=o=>{const d=String(o?.plan_date||"").slice(0,10);return!d||d>=WH_START;};
+const whPending=o=>whNeed(o)&&!o?.wh_done;
+// ERP 입력 / 창고이동 처리 컬럼
+const PROC={erp:{done:"erp_done",by:"erp_by",at:"erp_at",label:"ERP 입력",doneAct:"ERP 입력 완료",undoAct:"ERP 입력 취소"},wh:{done:"wh_done",by:"wh_by",at:"wh_at",label:"창고이동",doneAct:"창고이동 완료",undoAct:"창고이동 취소"}};
 // 입력 중 끊김 방지: 새 버전이 있어도 "입력칸 사용 중"이거나 "최근 1분 내 조작"이 있으면 기다렸다가 새로고침
 (function autoUpdateCheck(){
   let lastActive=Date.now(),pending=false;
@@ -240,21 +249,44 @@ function ChannelBadge({name,color,color2,size="md"}){
 }
 
 // ══ 비밀번호 모달 ═════════════════════════
-function PwModal({title,desc,onConfirm,onClose}){
-  const[pw,setPw]=useState("");const[err,setErr]=useState(false);
-  const submit=async()=>{if(pw===getDeletePw()){await onConfirm();onClose();}else{setErr(true);setPw("");}};
+function PwModal({title,desc,needName,needReason,onConfirm,onClose}){
+  const[pw,setPw]=useState("");const[err,setErr]=useState("");
+  const[name,setName]=useState("");const[reason,setReason]=useState("");
+  const[busy,setBusy]=useState(false);
+  const submit=async()=>{
+    if(busy)return;
+    if(needName&&!name.trim()){setErr("name");return;}
+    if(pw!==getDeletePw()){setErr("pw");setPw("");return;}
+    setBusy(true);
+    try{await onConfirm({name:name.trim(),reason:reason.trim()});}
+    catch(e){alert("처리 오류: "+(e?.message||e));}
+    setBusy(false);onClose();
+  };
+  const inS=bad=>({width:"100%",padding:"9px 13px",borderRadius:8,fontSize:15,background:"rgba(255,255,255,.07)",border:"1px solid "+(bad?"#e07070":"#c8821a"),color:"#f0e6d3",outline:"none",marginBottom:8,fontFamily:"inherit",boxSizing:"border-box"});
+  const onKey=e=>e.key==="Enter"&&submit();
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.78)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999}}>
-      <div style={{background:"#2e2e2c",border:"2px solid #6a8a5a",borderRadius:16,padding:"30px 34px",minWidth:300,textAlign:"center",boxShadow:"0 0 40px rgba(200,130,26,.4)"}}>
+      <div style={{background:"#2e2e2c",border:"2px solid #6a8a5a",borderRadius:16,padding:"30px 34px",minWidth:320,maxWidth:440,textAlign:"center",boxShadow:"0 0 40px rgba(200,130,26,.4)"}}>
         <div style={{fontSize:30,marginBottom:6}}>🔐</div>
         <div style={{color:"#d8ecca",fontWeight:700,fontSize:16,marginBottom:5}}>{title}</div>
-        {desc&&<div style={{color:"#c8a06a",fontSize:12,marginBottom:16}}>{desc}</div>}
-        <input type="password" value={pw} autoFocus onChange={e=>{setPw(e.target.value);setErr(false);}} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="비밀번호 입력"
-          style={{width:"100%",padding:"9px 13px",borderRadius:8,fontSize:15,background:"rgba(255,255,255,.07)",border:"1px solid "+(err?"#e07070":"#c8821a"),color:"#f0e6d3",outline:"none",marginBottom:6}}/>
-        {err&&<div style={{color:"#e07070",fontSize:12,marginBottom:6}}>❌ 비밀번호가 틀렸습니다.</div>}
+        {desc&&<div style={{color:"#c8a06a",fontSize:12,marginBottom:16,lineHeight:1.5,whiteSpace:"pre-line"}}>{desc}</div>}
+        {needName&&(<div style={{textAlign:"left"}}>
+          <div style={{fontSize:12,color:"#c8a06a",marginBottom:3}}>처리자 성함 *</div>
+          <input type="text" value={name} autoFocus onChange={e=>{setName(e.target.value);setErr("");}} onKeyDown={onKey} placeholder="본인 성함" style={inS(err==="name")}/>
+        </div>)}
+        {needReason&&(<div style={{textAlign:"left"}}>
+          <div style={{fontSize:12,color:"#c8a06a",marginBottom:3}}>사유 (선택)</div>
+          <input type="text" value={reason} onChange={e=>setReason(e.target.value)} onKeyDown={onKey} placeholder="예) 수량 오입력 / 업체 변경" style={inS(false)}/>
+        </div>)}
+        <div style={{textAlign:"left"}}>
+          {needName&&<div style={{fontSize:12,color:"#c8a06a",marginBottom:3}}>비밀번호 *</div>}
+          <input type="password" value={pw} autoFocus={!needName} onChange={e=>{setPw(e.target.value);setErr("");}} onKeyDown={onKey} placeholder="비밀번호 입력" style={inS(err==="pw")}/>
+        </div>
+        {err==="pw"&&<div style={{color:"#e07070",fontSize:12,marginBottom:6}}>❌ 비밀번호가 틀렸습니다.</div>}
+        {err==="name"&&<div style={{color:"#e07070",fontSize:12,marginBottom:6}}>❌ 처리자 성함을 입력해주세요.</div>}
         <div style={{display:"flex",gap:8,marginTop:10}}>
-          <button onClick={onClose} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"rgba(255,255,255,.07)",color:"#c8a06a",cursor:"pointer",fontFamily:"inherit"}}>취소</button>
-          <button onClick={submit} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"#c8821a",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>확인</button>
+          <button onClick={onClose} disabled={busy} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"rgba(255,255,255,.07)",color:"#c8a06a",cursor:"pointer",fontFamily:"inherit"}}>취소</button>
+          <button onClick={submit} disabled={busy} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"#c8821a",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:busy?.6:1}}>{busy?"처리 중...":"확인"}</button>
         </div>
       </div>
     </div>
@@ -263,11 +295,13 @@ function PwModal({title,desc,onConfirm,onClose}){
 
 // ══ 이름 입력 모달 (생산 완료 처리 시 담당자 성함 기록) ═════════════════════════
 function NameModal({title,desc,onConfirm,onClose}){
-  const[name,setName]=useState("");const[err,setErr]=useState(false);
+  const[name,setName]=useState("");const[err,setErr]=useState(false);const[busy,setBusy]=useState(false);
   const submit=async()=>{
+    if(busy)return;
     const v=name.trim();
     if(!v){setErr(true);return;}
-    await onConfirm(v);
+    setBusy(true);
+    try{await onConfirm(v);}catch(e){alert("처리 오류: "+(e?.message||e));setBusy(false);}
   };
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.78)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999}}>
@@ -280,7 +314,7 @@ function NameModal({title,desc,onConfirm,onClose}){
         {err&&<div style={{color:"#e07070",fontSize:12,marginBottom:6}}>❌ 성함을 입력해주세요.</div>}
         <div style={{display:"flex",gap:8,marginTop:10}}>
           <button onClick={onClose} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"rgba(255,255,255,.07)",color:"#c8a06a",cursor:"pointer",fontFamily:"inherit"}}>취소</button>
-          <button onClick={submit} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"#2d6a2d",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>확인</button>
+          <button onClick={submit} disabled={busy} style={{flex:1,padding:"8px",borderRadius:8,border:"none",background:"#2d6a2d",color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:busy?.6:1}}>{busy?"처리 중...":"확인"}</button>
         </div>
       </div>
     </div>
@@ -903,7 +937,7 @@ function ProductSearchSelect({pMaster,value,onChange}){
 }
 
 // ══ OrderCard — 수정 시 업체 드롭다운 지원 ═
-function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confirmOrder,completeOrder,revertOrder,cancelOrder,addExtraQty,markErpDone,primaryBtn,delBtn,moveOrder,isFirst,isLast,channels,shipTypeNames}){
+function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confirmOrder,completeOrder,revertOrder,cancelOrder,addExtraQty,markProc,undoProc,primaryBtn,delBtn,moveOrder,isFirst,isLast,channels,shipTypeNames}){
   const[editing,setEditing]=useState(false);
   const[qty,setQty]=useState(String(order.qty));
   const[editChId,setEditChId]=useState("");
@@ -973,6 +1007,8 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
         {statusChip}
         {isDone&&order.completed_by&&<span style={{background:"rgba(76,175,80,.15)",border:"1px solid #4caf5044",color:"#a8d8a0",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:600}}>👤 {order.completed_by}</span>}
         {isDone&&!order.erp_done&&<span style={{background:"rgba(220,120,40,.2)",border:"1px solid #d0803055",color:"#f0b070",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:700}}>⚠ ERP 미입력</span>}
+        {isDone&&whPending(order)&&<span style={{background:"rgba(60,160,120,.18)",border:"1px solid #5aaf8a55",color:"#8edfb8",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:700}}>⚠ 창고이동 미입력</span>}
+        {isDone&&order.erp_done&&!whPending(order)&&<span style={{background:"rgba(76,175,80,.25)",border:"1px solid #4caf5066",color:"#a8e8a0",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:700}}>✔ 처리완료</span>}
         {editing&&canEditMain?(
           <>
             <input type="number" value={qty} onChange={e=>setQty(e.target.value)} style={{...inpS,width:70}}/>
@@ -995,11 +1031,13 @@ function OrderCard({order,pName,sName,fmtDate,invest,delOrder,updateOrder,confir
           {order.status==="투입완료"&&!editing&&<button onClick={()=>revertOrder(order.id)} style={{background:"rgba(90,130,200,.2)",border:"1px solid #5a8fc055",color:"#8ac8d8",borderRadius:6,padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>↩ 투입회수</button>}
           {isConfirmed&&!editing&&addExtraQty&&<button onClick={()=>addExtraQty(order.id)} style={{background:"rgba(200,130,26,.22)",border:"1px solid #c8821a66",color:"#f5c97a",borderRadius:6,padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>➕ 추가생산</button>}
           {isConfirmed&&!editing&&<button onClick={()=>completeOrder(order.id)} style={{background:"#2d6a2d",border:"1px solid #4caf5066",color:"#6fcf97",borderRadius:6,padding:"5px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>✅ 완료</button>}
-          {/* ERP 입력완료 */}
-          {isDone&&!editing&&(order.erp_done
-            ?<span style={{background:"rgba(90,140,220,.2)",border:"1px solid #5a8fc055",color:"#8ac8f0",borderRadius:6,padding:"5px 12px",fontSize:12,fontWeight:700}}>🖥 ERP 완료</span>
-            :<button onClick={()=>markErpDone&&markErpDone(order.id)} style={{background:"linear-gradient(135deg,#4a5a8a,#6a7ac0)",border:"1px solid #5a8fc066",color:"#eaf0ff",borderRadius:6,padding:"5px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>🖥 ERP 입력완료</button>
-          )}
+          {/* ERP 입력 / 창고이동 처리 — 처리자 성함 기록 */}
+          {isDone&&!editing&&[["erp","🖥","ERP","ERP 입력완료","#4a5a8a","#6a7ac0","#8ac8f0"],["wh","🏭","창고이동","창고이동 완료","#3a6a52","#4a9a72","#8edfb8"]].filter(([k])=>k!=="wh"||whNeed(order)).map(([k,ic,lab,btn,c1,c2,fg])=>{
+            const done=!!order[k+"_done"],by=order[k+"_by"],at=order[k+"_at"];
+            return done
+              ?<span key={k} title={at?lab+" 처리: "+new Date(at).toLocaleString("ko-KR"):""} style={{display:"inline-flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.06)",border:"1px solid "+fg+"55",color:fg,borderRadius:6,padding:"4px 6px 4px 10px",fontSize:12,fontWeight:700}}>{ic} {lab} 완료{by?" · "+by:""}{undoProc&&<button onClick={()=>undoProc(order.id,k)} title={lab+" 완료 취소"} style={{background:"rgba(160,60,60,.3)",border:"1px solid #c0606055",color:"#f0a0a0",borderRadius:4,padding:"0 6px",fontSize:11,cursor:"pointer",fontFamily:"inherit",lineHeight:"18px"}}>✕</button>}</span>
+              :<button key={k} onClick={()=>markProc&&markProc([order.id],k)} style={{background:"linear-gradient(135deg,"+c1+","+c2+")",border:"1px solid "+fg+"66",color:"#f4fff8",borderRadius:6,padding:"5px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>{ic} {btn}</button>;
+          })}
           {/* 복귀 버튼 */}
           {(isDone||isConfirmed)&&!editing&&<button onClick={()=>revertOrder(order.id)} style={{background:"rgba(90,130,200,.2)",border:"1px solid #5a8fc055",color:"#8ac8d8",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>🔄 복귀</button>}
           {/* 생산취소/삭제: 완료·확정 상태에서 재고 복구 + 로그삭제 + 주문삭제 */}
@@ -1970,7 +2008,7 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
           <div style={{overflowX:"auto"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
               <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
-                <th style={{...th,textAlign:"left",position:"sticky",left:0,background:"#4a3f30"}}>기간</th>
+                <th style={{...th,textAlign:"left",position:"sticky",left:0,zIndex:2,background:"#4a3f30"}}>기간</th>
                 {(isAll?allKeys.map(k=>({k,l:k,c:allColor[k]})):[...chTop.map(x=>({k:x.cat+"|"+x.ch,l:x.ch,c:chColor[x.cat+"|"+x.ch]})),...(chRest.length?[{k:"etc",l:"기타 "+chRest.length+"곳",c:"#5a6a5a"}]:[])]).map(x=>(
                   <th key={x.k} style={{...th,textAlign:"right"}}><span style={{display:"inline-block",width:9,height:9,borderRadius:2,background:x.c,marginRight:5}}/>{x.l}</th>))}
                 <th style={{...th,textAlign:"right",color:"#f5c97a"}}>합계</th>
@@ -1980,7 +2018,7 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
                   const cols=isAll?allKeys.map(k=>({k,v:gv(B,k)})):[...chTop.map(x=>{const k=x.cat+"|"+x.ch;return{k,v:B.ch[k]||0};}),...(chRest.length?[{k:"etc",v:chRest.reduce((a,x)=>a+(B.ch[x.cat+"|"+x.ch]||0),0)}]:[])];
                   const rt=isAll?B.qty:(B.cat[catSel]||0);
                   return(<tr key={b}>
-                    <td style={{...td,whiteSpace:"nowrap",position:"sticky",left:0,background:"#353530"}}>{L.label}{L.sub&&<span style={{color:"#8a9a88",fontSize:11,marginLeft:4}}>{gran==="week"?L.sub:"("+L.sub+")"}</span>}</td>
+                    <td style={{...td,whiteSpace:"nowrap",position:"sticky",left:0,zIndex:1,background:"#353530"}}>{L.label}{L.sub&&<span style={{color:"#8a9a88",fontSize:11,marginLeft:4}}>{gran==="week"?L.sub:"("+L.sub+")"}</span>}</td>
                     {cols.map(x=>{const a=x.v>0&&rt?0.08+0.55*(x.v/rt):0;return(
                       <td key={x.k} style={{...num,background:a?`rgba(77,182,172,${a.toFixed(3)})`:"transparent",color:x.v?"#f0f0e8":"#5a6a58"}}>{x.v?<>{fmt(x.v)} <Pct v={x.v} t={rt} hi/></>:"-"}</td>);})}
                     <td style={{...num,fontWeight:700,color:"#f5c97a"}}>{fmt(rt)}</td>
@@ -1988,7 +2026,7 @@ function SalesTrendTab({sb,pMaster,bomData,askPw,user,onMasterChanged}){
                 {buckets.length>0&&(()=>{
                   const cols=isAll?allKeys.map(k=>({k,v:gv(tot,k)})):[...chTop.map(x=>({k:x.cat+"|"+x.ch,v:x.qty})),...(chRest.length?[{k:"etc",v:chRest.reduce((a,x)=>a+x.qty,0)}]:[])];
                   return(<tr style={{background:"rgba(200,130,26,.15)"}}>
-                    <td style={{...td,fontWeight:700,color:"#f5c97a",position:"sticky",left:0,background:"#4a3f30"}}>합계</td>
+                    <td style={{...td,fontWeight:700,color:"#f5c97a",position:"sticky",left:0,zIndex:1,background:"#4a3f30"}}>합계</td>
                     {cols.map(x=><td key={x.k} style={{...num,fontWeight:700,color:"#f5c97a"}}>{fmt(x.v)} <Pct v={x.v} t={selTotal}/></td>)}
                     <td style={{...num,fontWeight:800,color:"#f5c97a"}}>{fmt(selTotal)}</td>
                   </tr>);})()}
@@ -2357,6 +2395,7 @@ function App(){
     setTab(t);
     try{localStorage.setItem("drip2_tab",t);}catch{}
     if(t==="생산로그")loadLog();
+    if(t==="취소복귀로그")loadActionLog();
     if(t==="낱개재고"||t==="완제품생산")loadStock(); // 재고는 해당 탭 진입 시 최신화
   };
   const[sMaster,setSMaster]=useState([]);
@@ -2414,9 +2453,9 @@ function App(){
   // 완제품 생산 조회: printDate 기준 (5번)
   const[viewDate,setViewDate]=useState(today()); // 조회 날짜
   const[orderTab,setOrderTab]=useState("생산계획"); // 생산계획/생산확정/완료 탭
-  const[doneLineFilter,setDoneLineFilter]=useState("미입력"); // 완료 탭 라인 필터: 전체/A/B/미입력 — 기본값은 ERP 미입력건
+  const[doneLineFilter,setDoneLineFilter]=useState("미처리"); // 완료 탭 라인 필터: 전체/A/B/미입력 — 기본값은 ERP 미입력건
   // ── 분석2 (요일별 생산량 / 업체별 낱개) ──
-  const[a2Metric,setA2Metric]=useState("unit"); // unit: 낱개 기준 / qty: 완제품 기준
+  const a2Metric="unit"; // 분석2는 낱개 기준만 사용
   const[a2Mode,setA2Mode]=useState("avg");      // avg: 생산일 평균 / sum: 합계
   // 분석2 전용 기간 (분석 탭과 별개, 마지막 조회 기간 기억) — 기본: 최근 3개월
   const[a2Range,setA2Range]=useState(()=>{try{const v=JSON.parse(localStorage.getItem("drip2_a2Range")||"null");if(v&&v.from&&v.to)return v;}catch{}return{from:addDays(today(),-90),to:today()};});
@@ -2424,6 +2463,8 @@ function App(){
   const[a2Rows,setA2Rows]=useState([]);
   // 분석2 세부탭: overview(요일·전체) / bych(업체별 추이) — 분석2에 들어올 때마다 항상 "요일·전체 현황"부터
   const[a2View,setA2View]=useState("overview");
+  const[a2Gran,setA2Gran]=useState("week");   // 낱개 종류별: week / month / quarter
+  const[a2SelS,setA2SelS]=useState("");       // 낱개 종류별: 선택한 낱개 코드
   const[a2SelCh,setA2SelCh]=useState("__all__"); // __all__ = 업체 전체 비교
   useEffect(()=>{if(tab==="분석2"){setA2View("overview");setA2SelCh("__all__");}},[tab]);
   useEffect(()=>{try{localStorage.removeItem("drip2_a2View");}catch{}},[]); // 이전 버전에서 저장된 값 정리
@@ -2435,6 +2476,16 @@ function App(){
     try{localStorage.setItem("drip2_a2Range",JSON.stringify(r));}catch{}
   };
   const[checkedOrders,setCheckedOrders]=useState(new Set());
+  // ── 취소·복귀 로그 ──
+  const[actionLog,setActionLog]=useState([]);
+  const[actLogErr,setActLogErr]=useState("");
+  const[actLogLoading,setActLogLoading]=useState(false);
+  const[actLogRange,setActLogRange]=useState(()=>({from:addDays(today(),-30),to:today()}));
+  const[actLogDraft,setActLogDraft]=useState(()=>({from:addDays(today(),-30),to:today()}));
+  const[actLogType,setActLogType]=useState("전체");
+  const[actLogQ,setActLogQ]=useState("");
+  const actionLogWarned=useRef(false);
+  const[procPending,setProcPending]=useState(null); // 다른 날짜 ERP/창고이동 미처리 목록
 
   // 설정 — 업체 관련
   const[newChannel,setNewChannel]=useState({name:"",color:COLORS[0],color2:"",active:true});
@@ -2484,6 +2535,23 @@ function App(){
   //   - 주문: "진행중 + 최근 7일"만 조회 (전체 이력 반복 조회 중단), 변경 감지 시에만 조회
   //   - 재고: 변경 감지 시에만 조회 (전광판 탭 제외) / 투입 시에는 기존대로 DB 최신 재고로 재확인(CAS)
   //   - 브라우저 탭이 숨겨져 있으면 확인 중단, 다시 보이면 즉시 1회 갱신
+  // ── 화면 배치: 헤더 높이(탭이 줄바꿈되면 늘어남)·스크롤·창 너비를 실시간 반영 → 좌우 고정 패널이 헤더를 덮지 않게
+  const headerRef=useRef(null);
+  const[layout,setLayout]=useState(()=>({hb:96,vw:typeof window!=="undefined"?window.innerWidth:1920}));
+  useEffect(()=>{
+    const upd=()=>{
+      const el=headerRef.current;
+      const hb=el?Math.max(0,Math.round(el.getBoundingClientRect().bottom)):0;
+      const vw=window.innerWidth;
+      setLayout(prev=>prev.hb===hb&&prev.vw===vw?prev:{hb,vw});
+    };
+    upd();
+    window.addEventListener("scroll",upd,{passive:true});
+    window.addEventListener("resize",upd);
+    const ro=(window.ResizeObserver&&headerRef.current)?new ResizeObserver(upd):null;
+    if(ro)ro.observe(headerRef.current);
+    return()=>{window.removeEventListener("scroll",upd);window.removeEventListener("resize",upd);if(ro)ro.disconnect();};
+  },[user,loading]);
   const tabRef=useRef(tab);
   useEffect(()=>{tabRef.current=tab;},[tab]);
   // ★ [변경 감지 동기화] 10초마다 drip2_sync(변경 시각 2줄)만 확인 → 바뀌었을 때만 주문/재고 다시 조회
@@ -2541,6 +2609,7 @@ function App(){
     await Promise.all([loadMasters(),loadBom(),loadStock(),loadOrders(),loadChannels(),loadShipTypes()]);
     // 초기 탭이 생산로그면 자동 로드
     if(tab==="생산로그")loadLog();
+    if(tab==="취소복귀로그")loadActionLog();
     setLoading(false);
   };
   const loadMasters=async()=>{
@@ -2557,7 +2626,14 @@ function App(){
   //   ① 완료 안 된 건(대기/투입완료/확정) 전부  ② 최근 7일 완료 건  ③ 조회 날짜가 7일 이전이면 그 날짜 건
   const ORDER_WINDOW_DAYS=7;
   const viewDateRef=useRef(viewDate);
+  // 다른 날짜까지 포함한 ERP/창고이동 미처리 완료건 (id·날짜만 가볍게)
+  const loadProcPending=async()=>{
+    const{data,error}=await sb.from("drip2_orders").select("id,plan_date,erp_done,wh_done").eq("status","완료").or("erp_done.is.null,erp_done.eq.false,wh_done.is.null,wh_done.eq.false").order("plan_date",{ascending:false}).limit(2000);
+    if(error){setProcPending(null);return;}
+    setProcPending(data||[]);
+  };
   const loadOrders=async()=>{
+    loadProcPending();
     const cutoff=addDays(today(),-ORDER_WINDOW_DAYS);
     const vd=viewDateRef.current;
     const reqs=[
@@ -2588,6 +2664,19 @@ function App(){
     return Math.max(dbMax,localMax)+1;
   };
   // 생산로그: 최신 300건만 (전체 로드 금지)
+  const loadActionLog=async(r)=>{
+    const rg=r||actLogRange;
+    setActLogLoading(true);
+    const{data,error}=await sb.from("drip2_action_log").select("*").gte("created_at",rg.from+"T00:00:00+09:00").lte("created_at",rg.to+"T23:59:59+09:00").order("created_at",{ascending:false}).limit(3000);
+    setActLogLoading(false);
+    if(error){setActLogErr(error.message);setActionLog([]);return;}
+    setActLogErr("");setActionLog(data||[]);
+  };
+  const applyActLogRange=(from,to)=>{
+    if(!from||!to)return alert("시작일과 종료일을 모두 선택해주세요.");
+    if(from>to)return alert("시작일이 종료일보다 늦어요.");
+    const r={from,to};setActLogRange(r);setActLogDraft(r);loadActionLog(r);
+  };
   const loadLog=async(from,to)=>{
     let q=sb.from("drip2_prod_log").select("*").order("created_at",{ascending:false});
     if(from&&to){
@@ -2798,26 +2887,31 @@ function App(){
   // ── 분석2 엑셀 다운로드 (요일별 / 업체×요일 / 업체별 / 일자별) ──
   const exportAnalysis2Excel=()=>{
     const wb=XLSX.utils.book_new();
-    const wdRows=[["요일","생산일수","완제품 합계","완제품 일평균","낱개 합계","낱개 일평균","낱개 비중(%)"]];
+    const wdRows=[["요일","생산일수","낱개 합계","낱개 일평균","낱개 비중(%)"]];
     A2_WD.forEach(w=>{const W=a2Wd[w],n=W.days.size;
-      wdRows.push([WEEKDAY_KR[w]+"요일",n,W.qty,n?Math.round(W.qty/n):0,W.unit,n?Math.round(W.unit/n):0,a2TotalUnit?Number((W.unit/a2TotalUnit*100).toFixed(1)):0]);});
+      wdRows.push([WEEKDAY_KR[w]+"요일",n,W.unit,n?Math.round(W.unit/n):0,a2TotalUnit?Number((W.unit/a2TotalUnit*100).toFixed(1)):0]);});
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(wdRows),"요일별생산량");
-    ["unit","qty"].forEach(m=>{
-      const lab=m==="unit"?"낱개":"완제품";
-      const rows=[["업체",...A2_WD.map(w=>WEEKDAY_KR[w]+" 합계"),...A2_WD.map(w=>WEEKDAY_KR[w]+" 일평균"),"합계"]];
-      a2ChKeys.forEach(k=>{const C=a2Ch[k];
-        rows.push([k,...A2_WD.map(w=>C.wd[w]?C.wd[w][m]:0),...A2_WD.map(w=>{const n=a2Wd[w].days.size;return n?Math.round((C.wd[w]?C.wd[w][m]:0)/n):0;}),C[m]]);});
-      rows.push(["총 수량",...A2_WD.map(w=>a2Wd[w][m]),...A2_WD.map(w=>{const n=a2Wd[w].days.size;return n?Math.round(a2Wd[w][m]/n):0;}),m==="unit"?a2TotalUnit:a2TotalQty]);
-      XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),"업체x요일_"+lab);
-    });
-    const chRows=[["순위","업체","낱개 합계","낱개 비율(%)","완제품 합계","생산일수","생산일 평균 낱개"]];
+    const cwRows=[["업체",...A2_WD.map(w=>WEEKDAY_KR[w]+" 합계"),...A2_WD.map(w=>WEEKDAY_KR[w]+" 일평균"),"합계"]];
+    a2ChKeys.forEach(k=>{const C=a2Ch[k];
+      cwRows.push([k,...A2_WD.map(w=>C.wd[w]?C.wd[w].unit:0),...A2_WD.map(w=>{const n=a2Wd[w].days.size;return n?Math.round((C.wd[w]?C.wd[w].unit:0)/n):0;}),C.unit]);});
+    cwRows.push(["총 수량",...A2_WD.map(w=>a2Wd[w].unit),...A2_WD.map(w=>{const n=a2Wd[w].days.size;return n?Math.round(a2Wd[w].unit/n):0;}),a2TotalUnit]);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(cwRows),"업체x요일_낱개");
+    const chRows=[["순위","업체","낱개 합계","낱개 비율(%)","생산일수","생산일 평균 낱개"]];
     [...a2ChKeys].sort((a,b)=>a2Ch[b].unit-a2Ch[a].unit).forEach((k,i)=>{const C=a2Ch[k];
-      chRows.push([i+1,k,C.unit,a2TotalUnit?Number((C.unit/a2TotalUnit*100).toFixed(1)):0,C.qty,C.days.size,C.days.size?Math.round(C.unit/C.days.size):0]);});
+      chRows.push([i+1,k,C.unit,a2TotalUnit?Number((C.unit/a2TotalUnit*100).toFixed(1)):0,C.days.size,C.days.size?Math.round(C.unit/C.days.size):0]);});
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(chRows),"업체별낱개");
-    const dRows=[["날짜","요일",...a2ChKeys.map(k=>k+" 낱개"),"낱개 합계","완제품 합계"]];
+    const dRows=[["날짜","요일",...a2ChKeys.map(k=>k+" 낱개"),"낱개 합계"]];
     a2DateKeys.forEach(d=>{const D=a2Date[d];
-      dRows.push([d,WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()],...a2ChKeys.map(k=>D.ch[k]?D.ch[k].unit:0),D.unit,D.qty]);});
+      dRows.push([d,WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()],...a2ChKeys.map(k=>D.ch[k]?D.ch[k].unit:0),D.unit]);});
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(dRows),"일자별업체낱개");
+    const sRows=[["순위","낱개코드","낱개명","기간 합계","비중(%)","주평균","월평균","분기평균","최대 주 사용량","생산일 일평균","현재 재고","입고예정","재고 소진 예상(일)"]];
+    a2SKeys.forEach((k,i)=>{const t=a2SStat(k);
+      sRows.push([i+1,k,sName(k),a2S[k].total,a2STotal?Number((a2S[k].total/a2STotal*100).toFixed(1)):0,Math.round(t.wAvg),Math.round(t.mAvg),Math.round(t.qAvg),t.maxWk,Math.round(t.dAvg),t.stock,t.pend,t.cover!=null?Number(t.cover.toFixed(1)):""]);});
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(sRows),"낱개종류별_요약");
+    const mRows=[["낱개코드","낱개명",...a2Buckets.map(b=>{const L=a2BucketLbl(b);return L.label+(a2Gran==="week"?" "+L.sub:"");}),"합계"]];
+    a2SKeys.forEach(k=>mRows.push([k,sName(k),...a2Buckets.map(b=>a2S[k].b[b]||0),a2S[k].total]));
+    mRows.push(["","합계",...a2Buckets.map(b=>a2SKeys.reduce((x,k)=>x+(a2S[k].b[b]||0),0)),a2STotal]);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(mRows),"낱개종류별_"+A2_GRAN[a2Gran]);
     XLSX.writeFile(wb,"분석2_"+a2Range.from+"_"+a2Range.to+".xlsx");
   };
 
@@ -2879,7 +2973,9 @@ function App(){
 
   const sName=code=>sMaster.find(s=>s.code===code)?.name||code;
   const pName=code=>pMaster.find(p=>p.code===code)?.name||code;
-  const askPw=(title,desc,action)=>setPwModal({title,desc,action});
+  const askPw=(title,desc,action,opts={})=>setPwModal({title,desc,action,...opts});
+  // 취소·복귀 등 이력이 남는 작업: 처리자 성함(필수) + 사유(선택) + 비밀번호
+  const askAudit=(title,desc,action)=>askPw(title,desc,action,{needName:true,needReason:true});
   const bomOf=pCode=>bomData.filter(b=>b.p_code===pCode);
   // ── 설정이 덜 된 완제품 (사용중 + BOM 없음 또는 생산속도 없음) — 판매 엑셀 자동 등록 품목 등 ──
   const setupNeeded=bomLoaded?pMaster.filter(p=>p.active!==false).map(p=>{
@@ -3059,23 +3155,121 @@ function App(){
     if(data)setOrders(prev=>prev.map(o=>o.id===tempId?data:o));
   };
 
-  // 주문 삭제 (완료→대기 복귀)
+  // ══ 취소·복귀·처리 이력 (drip2_action_log) ══
+  const usedSummary=o=>(o?.detail?.details||[]).flatMap(d=>(d.used||[]).map(u=>({sCode:d.sCode,expiry:u.expiry,qty:u.qty})));
+  const logActions=async(entries)=>{
+    if(!entries||!entries.length)return;
+    const rows=entries.map(e=>{const o=e.order;return{
+      action:e.action,
+      order_id:o?String(o.id):null,
+      p_code:o?.p_code||null,p_name:o?pName(o.p_code):null,
+      channel:o?chDisplay(o):null,qty:o?.qty??null,line:o?.line||null,
+      plan_date:o?.plan_date||null,lot:o?.detail?.lot||null,
+      from_status:e.from||o?.status||null,to_status:e.to||null,
+      actor:e.actor||null,user_id:user?.user_id||null,reason:e.reason||null,
+      detail:e.restored?{restored:usedSummary(o)}:null,
+      ...(e.fields||{}),
+    };});
+    const{data,error}=await sb.from("drip2_action_log").insert(rows).select();
+    if(error){
+      console.error("이력 저장 오류:",error.message);
+      if(!actionLogWarned.current){actionLogWarned.current=true;alert("⚠️ 작업은 처리됐지만 취소·복귀 로그 저장에 실패했어요.\n"+error.message+"\n\n(최초 1회 SQL 실행이 필요할 수 있어요)");}
+      return;
+    }
+    if(data)setActionLog(prev=>[...data,...prev]);
+  };
+  // 낱개 재고 복구 — DB 최신 수량 기준으로 더함 (화면 재고가 오래돼도 정확)
+  const restoreStockFor=async(list)=>{
+    const delta={};
+    list.forEach(o=>(o?.detail?.details||[]).forEach(d=>(d.used||[]).forEach(u=>{if(u.id!=null)delta[String(u.id)]=(delta[String(u.id)]||0)+(u.qty||0);})));
+    const ids=Object.keys(delta);
+    if(!ids.length)return[];
+    const{data:cur,error}=await sb.from("drip2_stock").select("id,qty").in("id",ids);
+    if(error)throw new Error("재고 조회 오류: "+error.message);
+    const curMap=Object.fromEntries((cur||[]).map(r=>[String(r.id),r.qty]));
+    const live=ids.filter(id=>id in curMap);
+    const res=await Promise.all(live.map(id=>sb.from("drip2_stock").update({qty:curMap[id]+delta[id]}).eq("id",id)));
+    const err=res.find(r=>r.error);
+    if(err)throw new Error("재고 복구 오류: "+err.error.message);
+    setStock(prev=>prev.map(s=>{const k=String(s.id);return k in curMap&&delta[k]!=null?{...s,qty:curMap[k]+delta[k]}:s;}));
+    return ids.filter(id=>!(id in curMap));
+  };
+  // 생산로그 삭제 — logId와 order_id 둘 다로 (logId가 비어있는 건 대비)
+  const deleteLogsFor=async(list)=>{
+    const logIds=list.map(o=>o?.detail?.logId).filter(Boolean);
+    const oids=list.map(o=>o.id);
+    await Promise.all([
+      logIds.length?sb.from("drip2_prod_log").delete().in("id",logIds):null,
+      oids.length?sb.from("drip2_prod_log").delete().in("order_id",oids):null,
+    ].filter(Boolean));
+    setProdLog(prev=>prev.filter(l=>!logIds.includes(l.id)&&!oids.includes(l.order_id)));
+  };
+  // 주문 상태 변경/삭제 — "아직 같은 상태일 때만" 처리해서 다른 화면과 동시에 눌러도 재고가 두 번 복구되지 않게 함
+  const applyOrderChange=async(list,patch)=>{
+    const res=await Promise.all(list.map(o=>{
+      const q=patch?sb.from("drip2_orders").update(patch):sb.from("drip2_orders").delete();
+      return q.eq("id",o.id).eq("status",o.status).select("id");
+    }));
+    const ok=[],skipped=[],errs=[];
+    res.forEach((r,i)=>{if(r.error)errs.push(r.error.message);else if(r.data&&r.data.length)ok.push(list[i]);else skipped.push(list[i]);});
+    const okIds=ok.map(o=>o.id);
+    if(patch)setOrders(prev=>prev.map(o=>okIds.includes(o.id)?{...o,...patch}:o));
+    else setOrders(prev=>prev.filter(o=>!okIds.includes(o.id)));
+    return{ok,skipped,errs};
+  };
+  // 취소/복귀/삭제 공통 처리: 주문 변경 → (필요 시) 재고 복구 + 생산로그 삭제 → 이력 기록
+  const rollbackOrders=async(list,{patch,restore,action,toLabel,actor,reason})=>{
+    list=list.filter(o=>!String(o.id).startsWith("temp_"));
+    if(!list.length){alert("아직 저장 중인 주문이에요. 잠시 후 다시 시도해주세요.");return[];}
+    const{ok,skipped,errs}=await applyOrderChange(list,patch);
+    const withStock=restore?ok.filter(o=>(o.detail?.details||[]).length>0):[];
+    let missing=[];
+    if(withStock.length){missing=await restoreStockFor(withStock);await deleteLogsFor(withStock);}
+    if(ok.length)await logActions(ok.map(o=>({order:o,action:typeof action==="function"?action(o):action,to:toLabel,actor,reason,restored:withStock.includes(o)})));
+    const msgs=[];
+    if(skipped.length)msgs.push("⚠️ "+skipped.length+"건은 다른 화면에서 이미 상태가 바뀌어 건너뛰었어요.");
+    if(errs.length)msgs.push("❌ 오류 "+errs.length+"건: "+errs[0]);
+    if(missing.length)msgs.push("⚠️ 이미 삭제된 재고 행 "+missing.length+"건은 복구하지 못했어요. 낱개재고 탭에서 확인해주세요.");
+    if(msgs.length)alert(msgs.join("\n"));
+    return ok;
+  };
+  const resetProcPatch={erp_done:false,erp_by:null,erp_at:null,wh_done:false,wh_by:null,wh_at:null};
+  const procWarn=list=>list.some(o=>o.erp_done||o.wh_done)?"\n※ ERP·창고이동 처리 기록이 있어요. ERP 시스템에서도 직접 수정해주세요.":"";
+  // 주문 삭제 (대기/투입완료)
   const delOrder=id=>{
     const order=orders.find(o=>o.id===id);if(!order)return;
     const needRestore=order.status==="투입완료";
-    askPw("생산 주문 삭제",needRestore?"낱개 재고가 복구됩니다.":"해당 주문이 삭제됩니다.",async()=>{
-      if(needRestore&&order.detail&&order.detail.details){
-        for(const d of order.detail.details)for(const u of (d.used||[])){
-          const cur=stock.find(s=>s.id===u.id);
-          if(cur){const restored=cur.qty+u.qty;await sb.from("drip2_stock").update({qty:restored}).eq("id",u.id);setStock(prev=>prev.map(s=>s.id===u.id?{...s,qty:restored}:s));}
-        }
-        const logId=order.detail?.logId;
-        if(logId){await sb.from("drip2_prod_log").delete().eq("id",logId);}
-        else{await sb.from("drip2_prod_log").delete().eq("order_id",id);}
-        setProdLog(prev=>prev.filter(l=>l.id!==logId&&l.order_id!==id));
-      }
-      await sb.from("drip2_orders").delete().eq("id",id);
-      setOrders(prev=>prev.filter(o=>o.id!==id));
+    askAudit("생산 주문 삭제","["+pName(order.p_code)+" "+order.qty+"개] 주문이 삭제됩니다."+(needRestore?"\n낱개 재고가 복구됩니다.":""),async({name,reason})=>{
+      pollPaused.current=true;
+      try{await rollbackOrders([order],{patch:null,restore:true,action:"주문삭제",toLabel:"삭제",actor:name,reason});}
+      finally{resumePoll();}
+    });
+  };
+  // 선택 회수/복귀 → 대기
+  const bulkToWaiting=(ids,allowed)=>{
+    const isConf=allowed.includes("확정");
+    const list=orders.filter(o=>ids.includes(o.id)&&allowed.includes(o.status));
+    if(!list.length)return alert(isConf?"복귀할 항목을 선택하세요.":"투입완료 상태 항목만 회수할 수 있습니다.");
+    askAudit(isConf?"선택 생산계획 복귀":"선택 투입 회수","선택된 "+list.length+"건의 낱개 재고가 복구되고 생산계획(대기)으로 돌아갑니다.",async({name,reason})=>{
+      pollPaused.current=true;
+      try{
+        await rollbackOrders(list,{patch:{status:"대기",detail:null},restore:true,action:o=>o.status==="투입완료"?"투입회수":"생산계획 복귀",toLabel:"대기",actor:name,reason});
+        setCheckedOrders(new Set());
+        if(isConf)setOrderTab("생산계획");
+      }finally{resumePoll();}
+    });
+  };
+  // 선택 삭제 (대기/투입완료/확정)
+  const bulkDelete=ids=>{
+    const list=orders.filter(o=>ids.includes(o.id)&&["대기","투입완료","확정"].includes(o.status));
+    if(!list.length)return alert("삭제할 항목을 선택하세요.");
+    const nRestore=list.filter(o=>o.status!=="대기"&&(o.detail?.details||[]).length).length;
+    askAudit("선택 주문 삭제","선택된 "+list.length+"건을 삭제합니다."+(nRestore?"\n투입된 "+nRestore+"건은 낱개 재고가 복구됩니다.":""),async({name,reason})=>{
+      pollPaused.current=true;
+      try{
+        await rollbackOrders(list,{patch:null,restore:true,action:"주문삭제",toLabel:"삭제",actor:name,reason});
+        setCheckedOrders(new Set());
+      }finally{resumePoll();}
     });
   };
   const completeOrder=(id)=>{
@@ -3089,11 +3283,36 @@ function App(){
       // 탭 이동하지 않음 — 사용자가 직접 탭 전환
     }});
   };
-  // ERP 입력완료 처리 — 비밀번호 확인 후 처리
-  const markErpDone=(id)=>{
-    askPw("ERP 입력완료","비밀번호를 입력해주세요.",async()=>{
-      await sb.from("drip2_orders").update({erp_done:true}).eq("id",id);
-      setOrders(prev=>prev.map(o=>o.id===id?{...o,erp_done:true}:o));
+  // ERP 입력 / 창고이동 완료 처리 — 처리자 성함 기록 (여러 건 한 번에 가능)
+  const procColErr=msg=>/erp_by|erp_at|wh_done|wh_by|wh_at|column/i.test(msg||"")?"\n\n(최초 1회 SQL 실행이 필요해요)":"";
+  const markProc=(ids,kind)=>{
+    const P=PROC[kind];
+    const targets=orders.filter(o=>ids.includes(o.id)&&o.status==="완료"&&!o[P.done]&&(kind!=="wh"||whNeed(o)));
+    if(!targets.length)return alert("처리할 항목이 없어요. (이미 "+P.label+" 완료됐거나 완료 상태가 아님"+(kind==="wh"?" / 창고이동은 "+WH_START+" 생산분부터 적용":"")+")");
+    setNameModal({title:P.label+" 완료 처리",desc:(targets.length>1?targets.length+"건을 ":"")+P.label+" 완료 처리합니다. 처리자 성함을 입력해주세요.",onConfirm:async(name)=>{
+      pollPaused.current=true;
+      try{
+        const patch={[P.done]:true,[P.by]:name,[P.at]:new Date().toISOString()};
+        // 아직 처리 안 된 건만 갱신 (다른 사람이 먼저 처리했으면 이름을 덮어쓰지 않음)
+        const{data,error}=await sb.from("drip2_orders").update(patch).in("id",targets.map(o=>o.id)).eq("status","완료").not(P.done,"is",true).select("id");
+        if(error){alert(P.label+" 처리 오류: "+error.message+procColErr(error.message));return;}
+        const doneIds=(data||[]).map(r=>r.id);
+        setOrders(prev=>prev.map(o=>doneIds.includes(o.id)?{...o,...patch}:o));
+        setCheckedOrders(new Set());
+        await logActions(targets.filter(o=>doneIds.includes(o.id)).map(o=>({order:o,action:P.doneAct,from:P.label+" 미입력",to:P.label+" 완료",actor:name})));
+        if(doneIds.length<targets.length)alert("⚠️ "+(targets.length-doneIds.length)+"건은 다른 화면에서 이미 처리됐거나 상태가 바뀌어 건너뛰었어요.");
+      }finally{resumePoll();}
+    }});
+  };
+  const undoProc=(id,kind)=>{
+    const P=PROC[kind];const order=orders.find(o=>o.id===id);if(!order)return;
+    askAudit(P.label+" 완료 취소","["+pName(order.p_code)+" "+order.qty+"개] "+P.label+" 완료("+(order[P.by]||"-")+")를 취소하고 미입력으로 되돌립니다.",async({name,reason})=>{
+      const patch={[P.done]:false,[P.by]:null,[P.at]:null};
+      const{data,error}=await sb.from("drip2_orders").update(patch).eq("id",id).eq(P.done,true).select("id");
+      if(error)return alert("취소 오류: "+error.message+procColErr(error.message));
+      if(!data||!data.length)return alert("이미 다른 화면에서 취소됐어요.");
+      setOrders(prev=>prev.map(o=>o.id===id?{...o,...patch}:o));
+      await logActions([{order,action:P.undoAct,from:P.label+" 완료("+(order[P.by]||"-")+")",to:P.label+" 미입력",actor:name,reason}]);
     });
   };
   // 투입완료 → 확정
@@ -3103,52 +3322,23 @@ function App(){
     setCheckedOrders(prev=>{const n=new Set(prev);n.delete(id);return n;});
     // 탭 이동하지 않음 — 사용자가 직접 탭 전환
   };
-  // 복귀: 완료→확정, 확정→투입완료(생산계획), 투입완료→대기(투입회수)
+  // 복귀: 완료→확정 / 확정→대기(생산계획) / 투입완료→대기(투입회수) — 처리자·사유 로그 기록
   const revertOrder=id=>{
     const order=orders.find(o=>o.id===id);if(!order)return;
+    const run=(title,desc,opt,after)=>askAudit(title,desc,async({name,reason})=>{
+      pollPaused.current=true;
+      try{const ok=await rollbackOrders([order],{...opt,actor:name,reason});if(ok.length&&after)after();}
+      finally{resumePoll();}
+    });
     if(order.status==="완료"){
-      askPw("완료 → 생산확정 복귀","완료 상태를 생산확정으로 되돌립니다.",async()=>{
-        await sb.from("drip2_orders").update({status:"확정"}).eq("id",id);
-        setOrders(prev=>prev.map(o=>o.id===id?{...o,status:"확정"}:o));
-        setOrderTab("생산확정");
-      });
-    } else if(order.status==="확정"){
-      askPw("생산확정 → 생산계획 복귀","낱개 재고가 복구되고 생산계획(대기)으로 돌아갑니다.",async()=>{
-        // 재고 복구
-        if(order.detail&&order.detail.details){
-          for(const d of order.detail.details)for(const u of (d.used||[])){
-            const cur=stock.find(s=>s.id===u.id);
-            if(cur){const restored=cur.qty+u.qty;await sb.from("drip2_stock").update({qty:restored}).eq("id",u.id);setStock(prev=>prev.map(s=>s.id===u.id?{...s,qty:restored}:s));}
-          }
-        }
-        // ★ logId OR order_id 둘 다로 로그 삭제 (logId null 대비)
-        const logId=order.detail?.logId;
-        if(logId){await sb.from("drip2_prod_log").delete().eq("id",logId);}
-        else{await sb.from("drip2_prod_log").delete().eq("order_id",id);}
-        setProdLog(prev=>prev.filter(l=>l.id!==logId&&l.order_id!==id));
-        await sb.from("drip2_orders").update({status:"대기",detail:null}).eq("id",id);
-        setOrders(prev=>prev.map(o=>o.id===id?{...o,status:"대기",detail:null}:o));
-        setOrderTab("생산계획");
-        alert("✅ 생산계획으로 복귀했습니다.");
-      });
-    } else if(order.status==="투입완료"){
-      askPw("투입 회수","낱개 재고가 복구되고 투입 전(대기) 상태로 돌아갑니다.",async()=>{
-        // 재고 복구
-        if(order.detail&&order.detail.details){
-          for(const d of order.detail.details)for(const u of (d.used||[])){
-            const cur=stock.find(s=>s.id===u.id);
-            if(cur){const restored=cur.qty+u.qty;await sb.from("drip2_stock").update({qty:restored}).eq("id",u.id);setStock(prev=>prev.map(s=>s.id===u.id?{...s,qty:restored}:s));}
-          }
-        }
-        // ★ logId OR order_id 둘 다로 로그 삭제 (logId null 대비)
-        const logId=order.detail?.logId;
-        if(logId){await sb.from("drip2_prod_log").delete().eq("id",logId);}
-        else{await sb.from("drip2_prod_log").delete().eq("order_id",id);}
-        setProdLog(prev=>prev.filter(l=>l.id!==logId&&l.order_id!==id));
-        await sb.from("drip2_orders").update({status:"대기",detail:null}).eq("id",id);
-        setOrders(prev=>prev.map(o=>o.id===id?{...o,status:"대기",detail:null}:o));
-        alert("✅ 투입이 회수되어 대기 상태로 돌아갔습니다.");
-      });
+      run("완료 → 생산확정 복귀","완료 상태를 생산확정으로 되돌립니다. ERP·창고이동 처리 기록도 초기화돼요."+procWarn([order]),
+        {patch:{status:"확정",...resetProcPatch},restore:false,action:"생산확정 복귀",toLabel:"확정"},()=>setOrderTab("생산확정"));
+    }else if(order.status==="확정"){
+      run("생산확정 → 생산계획 복귀","낱개 재고가 복구되고 생산계획(대기)으로 돌아갑니다.",
+        {patch:{status:"대기",detail:null},restore:true,action:"생산계획 복귀",toLabel:"대기"},()=>setOrderTab("생산계획"));
+    }else if(order.status==="투입완료"){
+      run("투입 회수","낱개 재고가 복구되고 투입 전(대기) 상태로 돌아갑니다.",
+        {patch:{status:"대기",detail:null},restore:true,action:"투입회수",toLabel:"대기"});
     }
   };
   // 주문 수정 — patch에 담긴 항목만 저장 (수량/업체/라인/출고정보)
@@ -3159,30 +3349,14 @@ function App(){
     return true;
   };
 
-  // 생산취소: 완료 상태에서 완전 취소 (재고복구 + 로그삭제 + 주문삭제)
+  // 생산취소(완료) / 삭제(확정): 재고 복구 + 생산로그 삭제 + 주문 삭제 — 로그 기록
   const cancelOrder=id=>{
     const order=orders.find(o=>o.id===id);if(!order)return;
-    askPw("생산 취소","낱개 재고가 복구되고 생산로그가 삭제되며 주문이 완전히 삭제됩니다.",async()=>{
-      // 재고 복구
-      if(order.detail&&order.detail.details){
-        for(const d of order.detail.details)for(const u of (d.used||[])){
-          const cur=stock.find(s=>s.id===u.id);
-          if(cur){
-            const restored=cur.qty+u.qty;
-            await sb.from("drip2_stock").update({qty:restored}).eq("id",u.id);
-            setStock(prev=>prev.map(s=>s.id===u.id?{...s,qty:restored}:s));
-          }
-        }
-      }
-      // 로그 삭제 (logId OR order_id 둘 다)
-      const logId=order.detail?.logId;
-      if(logId){await sb.from("drip2_prod_log").delete().eq("id",logId);}
-      else{await sb.from("drip2_prod_log").delete().eq("order_id",id);}
-      setProdLog(prev=>prev.filter(l=>l.id!==logId&&l.order_id!==id));
-      // 주문 삭제
-      await sb.from("drip2_orders").delete().eq("id",id);
-      setOrders(prev=>prev.filter(o=>o.id!==id));
-      alert("✅ 생산이 취소되었습니다. 재고가 복구되었습니다.");
+    const isDone=order.status==="완료";
+    askAudit(isDone?"생산 취소":"생산확정 주문 삭제","["+pName(order.p_code)+" "+order.qty+"개] 낱개 재고가 복구되고 생산로그가 삭제되며 주문이 완전히 삭제됩니다."+procWarn([order]),async({name,reason})=>{
+      pollPaused.current=true;
+      try{await rollbackOrders([order],{patch:null,restore:true,action:isDone?"생산취소":"주문삭제",toLabel:"삭제",actor:name,reason});}
+      finally{resumePoll();}
     });
   };
   const toggleCheck=id=>setCheckedOrders(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
@@ -3453,13 +3627,14 @@ function App(){
   const delBomComp=(id,sCode)=>askPw("BOM 구성품 삭제","["+sName(sCode)+"] 삭제됩니다.",async()=>{await sb.from("drip2_bom").delete().eq("id",id);setBomData(prev=>prev.filter(b=>b.id!==id));});
   const editBomQty=async(id,val)=>{await sb.from("drip2_bom").update({qty:parseInt(val)||1}).eq("id",id);};
 
-  // ── 생산로그 삭제 ──
+  // ── 생산로그 삭제 (재고는 복구하지 않음) — 로그 기록 ──
   const delLog=log=>{
     const label=log.lot||fmtDate(log.fin_exp)||String(log.id);
-    askPw("생산로그 삭제","LOT: "+label+" / "+pName(log.p_code)+" "+log.qty+"개",async()=>{
+    askAudit("생산로그 삭제","LOT: "+label+" / "+pName(log.p_code)+" "+log.qty+"개\n(낱개 재고는 복구되지 않아요)",async({name,reason})=>{
       const{error}=await sb.from("drip2_prod_log").delete().eq("id",log.id);
       if(error){alert("삭제 오류: "+error.message);return;}
       setProdLog(prev=>prev.filter(l=>l.id!==log.id));
+      await logActions([{action:"생산로그 삭제",actor:name,reason,fields:{order_id:log.order_id!=null?String(log.order_id):null,p_code:log.p_code,p_name:pName(log.p_code),channel:log.channel||null,qty:log.qty,lot:log.lot||null,from_status:"생산로그",to_status:"삭제",detail:{details:log.details||null,fin_exp:log.fin_exp||null}}}]);
     });
   };
 
@@ -3582,6 +3757,14 @@ function App(){
     if(!viewDate)return true;
     return (o.plan_date||"")=== viewDate;
   });
+  // 완료 탭 필터: 라인 / 처리 상태
+  const doneFilterFn=o=>{switch(doneLineFilter){
+    case"A":return(o.line||"A")==="A";
+    case"B":return o.line==="B";
+    case"미처리":return!o.erp_done||whPending(o);
+    case"ERP미입력":return!o.erp_done;
+    case"창고미입력":return whPending(o);
+    default:return true;}};
 
   // ── 생산로그 날짜 필터 (11번) ──
   const filteredLog=prodLog.filter(log=>{
@@ -3714,6 +3897,16 @@ function App(){
     </div>
   );
 
+  // ── 좌우 패널 배치 계산 ──
+  const SIDE_W=220,SIDE_GAP=14,MAIN_W=1300;
+  const sideTop=layout.hb+12;                 // 헤더 바로 아래 (스크롤로 헤더가 사라지면 화면 위 12px)
+  const sideMaxH="calc(100vh - "+(sideTop+16)+"px)";
+  const sideNarrow=layout.vw<MAIN_W+2*(SIDE_W+SIDE_GAP+16); // 양옆 여백에 패널이 안 들어가는 화면
+  const sideX="max("+SIDE_GAP+"px, calc(50% - "+(MAIN_W/2+SIDE_W+16)+"px))";
+  const mainStyle=(tab==="완제품생산"&&sideNarrow)
+    ?{padding:"18px 20px",maxWidth:"none",marginLeft:sideStockOpen?SIDE_GAP+SIDE_W+16:64,marginRight:sideUtilOpen?SIDE_GAP+SIDE_W+16:64,display:"block"}
+    :{padding:"18px 20px",maxWidth:tab==="판매추이"?1680:MAIN_W,margin:"0 auto",display:tab==="전광판"?"none":"block"};
+
   // ── 분석 계산 (선택 기간 + 완료 데이터 기반) ──
   const anaRange=periodRange(anaPeriodType,anaAnchor,anaCustomFrom,anaCustomTo);
   const anaFrom=anaRange.from,anaTo=anaRange.to;
@@ -3821,6 +4014,55 @@ function App(){
   const a2ProdDays=a2DateKeys.length;
   const a2BestWd=[...A2_WD].filter(w=>a2Wd[w].days.size>0).sort((a,b)=>(a2Pick(a2Wd[b])/a2Wd[b].days.size)-(a2Pick(a2Wd[a])/a2Wd[a].days.size))[0];
   const a2NoBom=[...new Set(a2Rows.filter(r=>!a2UnitsOf(r.p_code)).map(r=>r.p_code))];
+  // ══ 분석2 · 낱개 종류별 사용량 (완료 수량 × BOM 구성) ══
+  const A2_GRAN={week:"주별",month:"월별",quarter:"분기별"};
+  const a2BucketOf=d=>a2Gran==="week"?salesWeekStart(d):a2Gran==="month"?d.slice(0,7):d.slice(0,4)+"-Q"+(Math.floor((Number(d.slice(5,7))-1)/3)+1);
+  const a2BucketSpan=b=>{
+    if(a2Gran==="week")return[b,addDays(b,6)];
+    if(a2Gran==="month"){const y=+b.slice(0,4),m=+b.slice(5,7);return[b+"-01",new Date(Date.UTC(y,m,0)).toISOString().slice(0,10)];}
+    const y=+b.slice(0,4),q=+b.slice(6);const sm=(q-1)*3+1;
+    return[y+"-"+String(sm).padStart(2,"0")+"-01",new Date(Date.UTC(y,sm+2,0)).toISOString().slice(0,10)];
+  };
+  const a2BucketLbl=b=>{
+    const[st,en]=a2BucketSpan(b);const part=st<a2Range.from||en>a2Range.to;
+    if(a2Gran==="week")return{label:b.slice(5).replace("-","/"),sub:"~"+en.slice(5).replace("-","/")+(part?" *":"")};
+    if(a2Gran==="month")return{label:b.slice(2,4)+"년 "+Number(b.slice(5,7))+"월",sub:part?"일부 *":""};
+    return{label:b.slice(2,4)+"년 "+b.slice(6)+"분기",sub:part?"일부 *":""};
+  };
+  // 기간 안의 모든 구간 (사용 0인 구간도 표시)
+  const a2Buckets=(()=>{const out=[];let d=a2Range.from,guard=0;
+    while(d<=a2Range.to&&guard++<4000){const b=a2BucketOf(d);if(out[out.length-1]!==b)out.push(b);d=addDays(d,1);}return out;})();
+  const a2BomBy={};bomData.forEach(b=>{(a2BomBy[b.p_code]=a2BomBy[b.p_code]||[]).push(b);});
+  const a2S={};
+  a2Rows.forEach(r=>{
+    const d=(r.plan_date||"").slice(0,10);if(!d)return;
+    const bk=a2BucketOf(d),wk=salesWeekStart(d),ck=a2Key(r);
+    (a2BomBy[r.p_code]||[]).forEach(c=>{
+      const u=(r.qty||0)*(c.qty||0);if(!u)return;
+      const S=a2S[c.s_code]||(a2S[c.s_code]={code:c.s_code,total:0,b:{},wk:{},prod:{},ch:{},days:new Set()});
+      S.total+=u;S.b[bk]=(S.b[bk]||0)+u;S.wk[wk]=(S.wk[wk]||0)+u;
+      S.prod[r.p_code]=(S.prod[r.p_code]||0)+u;S.ch[ck]=(S.ch[ck]||0)+u;S.days.add(d);
+    });
+  });
+  const a2SDays=daysBetween(a2Range.from,a2Range.to);
+  const a2SKeys=Object.keys(a2S).sort((a,b)=>a2S[b].total-a2S[a].total);
+  const a2STotal=a2SKeys.reduce((a,k)=>a+a2S[k].total,0);
+  const S_PALETTE=["#5aa9e6","#b06ad0","#6fcf97","#f2994a","#eb5757","#56ccf2","#f2c94c","#bb6bd9","#27ae60","#9b8579","#4db6ac","#e0a0c0","#a0c060","#c0a060"];
+  const a2SColor={};{const used=new Set();a2SKeys.forEach((k,i)=>{let c=sColor(k);if(!c||used.has(c))c=S_PALETTE.find(x=>!used.has(x))||S_PALETTE[i%S_PALETTE.length];used.add(c);a2SColor[k]=c;});}
+  const a2SStock=code=>stock.filter(x=>x.s_code===code&&!x.is_pending).reduce((a,x)=>a+(x.qty||0),0);
+  const a2SPend=code=>stock.filter(x=>x.s_code===code&&x.is_pending).reduce((a,x)=>a+(x.qty||0),0);
+  const a2SStat=k=>{const S=a2S[k];const wkVals=Object.values(S.wk);
+    const wAvg=S.total/(a2SDays/7),mAvg=S.total/(a2SDays/30.44),qAvg=S.total/(a2SDays/91.31);
+    const st=a2SStock(k);
+    const dAvg=S.total/(a2ProdDays||1); // 생산일 기준 하루 평균 사용량
+    return{wAvg,mAvg,qAvg,dAvg,maxWk:wkVals.length?Math.max(...wkVals):0,stock:st,pend:a2SPend(k),cover:dAvg>0?st/dAvg:null};};
+  const a2STop=a2SKeys.slice(0,10),a2SRest=a2SKeys.slice(10);
+  const a2SChart=a2Buckets.map(b=>({...a2BucketLbl(b),segs:[
+    ...a2STop.map(k=>({key:k,name:sName(k),value:a2S[k].b[b]||0,color:a2SColor[k]})),
+    ...(a2SRest.length?[{key:"etc",name:"기타 "+a2SRest.length+"종",value:a2SRest.reduce((a,k)=>a+(a2S[k].b[b]||0),0),color:"#5a6a5a"}]:[])]}));
+  const a2SHeatMax=Math.max(1,...a2SKeys.flatMap(k=>a2Buckets.map(b=>a2S[k].b[b]||0)));
+  const a2SSel=a2SelS&&a2S[a2SelS]?a2SelS:"";
+
   // 차트 데이터
   const a2WdChart=a2WdShow.map(w=>({label:WEEKDAY_KR[w],sub:a2Wd[w].days.size+"일",segs:[{key:"전체",name:"전체",value:a2WdVal(w,a2Wd[w]),color:a2Metric==="unit"?"#4db6ac":"#f5c97a"}]}));
   const a2WdChChart=a2WdShow.map(w=>({label:WEEKDAY_KR[w],sub:a2Wd[w].days.size+"일",segs:a2ChKeys.map(k=>({key:k,name:k,value:a2WdVal(w,a2Wd[w].ch[k]),color:a2ChColor[k]}))}));
@@ -3920,11 +4162,11 @@ function App(){
   return(
     <div style={{minHeight:"100vh"}}>
       {showPlanSetting&&<PlanSettingModal/>}
-      {pwModal&&<PwModal title={pwModal.title} desc={pwModal.desc} onConfirm={()=>{pwModal.action();setPwModal(null);}} onClose={()=>setPwModal(null)}/>}
+      {pwModal&&<PwModal title={pwModal.title} desc={pwModal.desc} needName={pwModal.needName} needReason={pwModal.needReason} onConfirm={info=>pwModal.action(info)} onClose={()=>setPwModal(null)}/>}
       {nameModal&&<NameModal title={nameModal.title} desc={nameModal.desc} onConfirm={async(name)=>{await nameModal.onConfirm(name);setNameModal(null);}} onClose={()=>setNameModal(null)}/>}
 
       {/* 헤더 */}
-      <div style={{background:"linear-gradient(90deg,#2c2c2a,#484844,#2c2c2a)",borderBottom:"2px solid #7a9a6a",padding:"12px 20px",display:"flex",alignItems:"center",gap:12,boxShadow:"0 4px 18px rgba(0,0,0,.35)",flexWrap:"wrap"}}>
+      <div ref={headerRef} style={{position:"relative",zIndex:10,background:"linear-gradient(90deg,#2c2c2a,#484844,#2c2c2a)",borderBottom:"2px solid #7a9a6a",padding:"12px 20px",display:"flex",alignItems:"center",gap:12,boxShadow:"0 4px 18px rgba(0,0,0,.35)",flexWrap:"wrap"}}>
         <span style={{fontSize:24}}>☕</span>
         <div>
           <div style={{fontSize:16,fontWeight:700,color:"#e8f0e0",letterSpacing:1}}>드립백 생산 관리 시스템</div>
@@ -3951,8 +4193,8 @@ function App(){
           );
         })()}
         <div style={{marginLeft:"auto",display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
-          {["낱개재고","완제품생산","BOM관리","제품마스터","생산로그","분석","분석2","판매추이","추적","전광판","설정"].map(t=>(
-            <button key={t} onClick={()=>switchTab(t)} style={{padding:"5px 13px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,background:tab===t?(t==="전광판"?"#0d2a18":"#6a8a5a"):"rgba(255,255,255,.1)",color:tab===t?(t==="전광판"?"#00ff88":"#fff"):"#c8c8b8",fontWeight:tab===t?700:400,boxShadow:tab===t&&t==="전광판"?"0 0 8px rgba(0,255,136,.35)":"none"}}>{t==="전광판"?"📺 전광판":t==="분석"?"📊 분석":t==="분석2"?"📊 분석2":t==="판매추이"?"🛒 판매추이":t==="추적"?"🔍 추적":t}{((t==="제품마스터"&&setupNeeded.length>0)||(t==="BOM관리"&&setupNeeded.some(x=>x.noBom)))&&<span title="수정할 제품이 있어요" style={{display:"inline-block",width:8,height:8,borderRadius:"50%",background:"#ff4d4d",boxShadow:"0 0 6px #ff4d4d",marginLeft:5,verticalAlign:"middle"}}/>}</button>
+          {["낱개재고","완제품생산","BOM관리","제품마스터","생산로그","취소복귀로그","분석","분석2","판매추이","추적","전광판","설정"].map(t=>(
+            <button key={t} onClick={()=>switchTab(t)} style={{padding:"5px 13px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,background:tab===t?(t==="전광판"?"#0d2a18":"#6a8a5a"):"rgba(255,255,255,.1)",color:tab===t?(t==="전광판"?"#00ff88":"#fff"):"#c8c8b8",fontWeight:tab===t?700:400,boxShadow:tab===t&&t==="전광판"?"0 0 8px rgba(0,255,136,.35)":"none"}}>{t==="전광판"?"📺 전광판":t==="취소복귀로그"?"📝 취소·복귀 로그":t==="분석"?"📊 분석":t==="분석2"?"📊 분석2":t==="판매추이"?"🛒 판매추이":t==="추적"?"🔍 추적":t}{((t==="제품마스터"&&setupNeeded.length>0)||(t==="BOM관리"&&setupNeeded.some(x=>x.noBom)))&&<span title="수정할 제품이 있어요" style={{display:"inline-block",width:8,height:8,borderRadius:"50%",background:"#ff4d4d",boxShadow:"0 0 6px #ff4d4d",marginLeft:5,verticalAlign:"middle"}}/>}</button>
           ))}
           <div style={{marginLeft:6,display:"flex",alignItems:"center",gap:8,padding:"3px 10px",background:"rgba(255,255,255,.07)",borderRadius:20,border:"1px solid #6a8a5a44"}}>
             <span style={{fontSize:11,color:"#a8b8a0"}}>👤 {user.user_id}</span>
@@ -3971,7 +4213,7 @@ function App(){
       {/* ════ 완제품생산 전용: 우측 여백에 금일 가동률 패널 ════ */}
       {tab==="완제품생산"&&!sideUtilOpen&&(
         <button onClick={toggleSideUtil} title="금일 가동률 펼치기"
-          style={{position:"fixed",right:"max(14px, calc(50% - 886px))",top:96,zIndex:5,background:"rgba(46,46,44,.95)",border:"1px solid #7a8a7066",borderRadius:12,padding:"12px 8px",cursor:"pointer",fontFamily:"inherit",color:"#c8ddb8",fontSize:13,fontWeight:700,display:"flex",flexDirection:"column",alignItems:"center",gap:6,boxShadow:"0 4px 14px rgba(0,0,0,.35)"}}>
+          style={{position:"fixed",right:sideX,top:sideTop,zIndex:5,background:"rgba(46,46,44,.95)",border:"1px solid #7a8a7066",borderRadius:12,padding:"12px 8px",cursor:"pointer",fontFamily:"inherit",color:"#c8ddb8",fontSize:13,fontWeight:700,display:"flex",flexDirection:"column",alignItems:"center",gap:6,boxShadow:"0 4px 14px rgba(0,0,0,.35)"}}>
           <span style={{color:"#f5c97a",fontSize:14}}>◀</span>
           <span>📈</span>
           <span style={{writingMode:"vertical-rl",letterSpacing:2}}>금일 가동률</span>
@@ -3979,7 +4221,7 @@ function App(){
         </button>
       )}
       {tab==="완제품생산"&&sideUtilOpen&&(
-        <div style={{position:"fixed",right:"max(14px, calc(50% - 886px))",top:96,width:220,maxHeight:"calc(100vh - 116px)",overflowY:"auto",background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"14px 12px",zIndex:5}}>
+        <div style={{position:"fixed",right:sideX,top:sideTop,width:220,maxHeight:sideMaxH,overflowY:"auto",background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"14px 12px",zIndex:5}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:6}}>
             <div style={{fontSize:13,fontWeight:700,color:"#c8ddb8"}}>📈 금일 가동률</div>
             <button onClick={toggleSideUtil} title="접기"
@@ -4048,14 +4290,14 @@ function App(){
       {/* ════ 완제품생산 전용: 좌측 여백에 낱개재고 사이드바 (본문 폭은 그대로 유지) ════ */}
       {tab==="완제품생산"&&!sideStockOpen&&(
         <button onClick={toggleSideStock} title="낱개 재고 펼치기"
-          style={{position:"fixed",left:"max(14px, calc(50% - 886px))",top:96,zIndex:5,background:"rgba(46,46,44,.95)",border:"1px solid #7a8a7066",borderRadius:12,padding:"12px 8px",cursor:"pointer",fontFamily:"inherit",color:"#c8ddb8",fontSize:13,fontWeight:700,display:"flex",flexDirection:"column",alignItems:"center",gap:6,boxShadow:"0 4px 14px rgba(0,0,0,.35)"}}>
+          style={{position:"fixed",left:sideX,top:sideTop,zIndex:5,background:"rgba(46,46,44,.95)",border:"1px solid #7a8a7066",borderRadius:12,padding:"12px 8px",cursor:"pointer",fontFamily:"inherit",color:"#c8ddb8",fontSize:13,fontWeight:700,display:"flex",flexDirection:"column",alignItems:"center",gap:6,boxShadow:"0 4px 14px rgba(0,0,0,.35)"}}>
           <span>🧩</span>
           <span style={{writingMode:"vertical-rl",letterSpacing:2}}>낱개 재고</span>
           <span style={{color:"#f5c97a",fontSize:14}}>▶</span>
         </button>
       )}
       {tab==="완제품생산"&&sideStockOpen&&(
-        <div style={{position:"fixed",left:"max(14px, calc(50% - 886px))",top:96,width:220,maxHeight:"calc(100vh - 116px)",overflowY:"auto",background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"14px 12px",zIndex:5}}>
+        <div style={{position:"fixed",left:sideX,top:sideTop,width:220,maxHeight:sideMaxH,overflowY:"auto",background:"rgba(255,255,255,.04)",border:"1px solid #7a8a7044",borderRadius:12,padding:"14px 12px",zIndex:5}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,gap:6}}>
             <div style={{fontSize:13,fontWeight:700,color:"#c8ddb8"}}>🧩 낱개 재고 <span style={{fontSize:11,color:"#8a9a88",fontWeight:400}}>(적은순)</span></div>
             <button onClick={toggleSideStock} title="접기"
@@ -4076,7 +4318,7 @@ function App(){
         </div>
       )}
 
-      <div style={{padding:"18px 20px",maxWidth:tab==="판매추이"?1680:1300,margin:"0 auto",display:tab==="전광판"?"none":"block"}}>
+      <div style={mainStyle}>
 
         {/* ════ 낱개재고 ════ */}
         {tab==="낱개재고"&&(
@@ -4250,6 +4492,32 @@ function App(){
             </div>
 
             {/* 다중 선택 */}
+            {/* 다른 날짜 ERP/창고이동 미처리 안내 */}
+            {(()=>{
+              if(!procPending||!procPending.length)return null;
+              const byDate={};
+              procPending.forEach(r=>{const d=(r.plan_date||"").slice(0,10);if(!d||d===viewDate)return;if(r.erp_done&&!whPending(r))return;
+                if(!byDate[d])byDate[d]={n:0,erp:0,wh:0};byDate[d].n++;if(!r.erp_done)byDate[d].erp++;if(whPending(r))byDate[d].wh++;});
+              const ds=Object.keys(byDate).sort().reverse();
+              if(!ds.length)return null;
+              const total=ds.reduce((a,d)=>a+byDate[d].n,0);
+              return(
+                <div style={{background:"rgba(220,120,40,.08)",border:"1px solid #d0803055",borderRadius:10,padding:"10px 14px",marginBottom:14}}>
+                  <div style={{fontSize:13,fontWeight:700,color:"#f0b070",marginBottom:8}}>⚠ 다른 날짜에 ERP·창고이동 미처리 완료건 {total}건 <span style={{fontWeight:400,fontSize:12,color:"#c8a080"}}>— 날짜를 누르면 바로 이동해요</span></div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {ds.slice(0,15).map(d=>{const x=byDate[d];return(
+                      <button key={d} onClick={()=>{setViewDate(d);setOrderTab("완료");setDoneLineFilter("미처리");setCheckedOrders(new Set());}}
+                        style={{background:"rgba(255,255,255,.06)",border:"1px solid #d0803044",borderRadius:8,color:"#e8dcc0",padding:"4px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                        <b style={{color:"#f5c97a"}}>{d.slice(5).replace("-","/")}({WEEKDAY_KR[new Date(d+"T00:00:00Z").getUTCDay()]})</b>
+                        {x.erp>0&&<span style={{color:"#8ac8f0",marginLeft:6}}>ERP {x.erp}</span>}
+                        {x.wh>0&&<span style={{color:"#8edfb8",marginLeft:6}}>창고 {x.wh}</span>}
+                      </button>);})}
+                    {ds.length>15&&<span style={{fontSize:12,color:"#a89070",alignSelf:"center"}}>외 {ds.length-15}일</span>}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* 3단계 탭 */}
             <div style={{display:"flex",gap:0,marginBottom:14,borderBottom:"2px solid #6a8a5a33",alignItems:"center"}}>
               {[
@@ -4257,7 +4525,7 @@ function App(){
                 ["생산확정", viewOrders.filter(o=>o.status==="확정").length, "#f5c97a"],
                 ["완료",     viewOrders.filter(o=>o.status==="완료").length, "#6fcf97"],
               ].map(([t,cnt,color])=>(
-                <button key={t} onClick={()=>{setOrderTab(t);setCheckedOrders(new Set());if(t==="완료")setDoneLineFilter("미입력");}}
+                <button key={t} onClick={()=>{setOrderTab(t);setCheckedOrders(new Set());if(t==="완료")setDoneLineFilter("미처리");}}
                   style={{background:"none",border:"none",padding:"8px 22px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
                     color:orderTab===t?"#d8ecca":"#8a9a88",
                     borderBottom:orderTab===t?"2px solid "+color:"2px solid transparent",marginBottom:-2}}>
@@ -4266,30 +4534,35 @@ function App(){
                 </button>
               ))}
               {(()=>{
-                const erpPendingCnt=viewOrders.filter(o=>o.status==="완료"&&!o.erp_done).length;
-                return erpPendingCnt>0
-                  ?<span style={{marginLeft:8,marginBottom:6,background:"rgba(220,120,40,.2)",border:"1px solid #d0803055",color:"#f0b070",borderRadius:20,padding:"3px 12px",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>⚠ ERP 미입력 {erpPendingCnt}건</span>
-                  :null;
+                const done=viewOrders.filter(o=>o.status==="완료");
+                const erpN=done.filter(o=>!o.erp_done).length,whN=done.filter(whPending).length;
+                const go=f=>{setOrderTab("완료");setCheckedOrders(new Set());setDoneLineFilter(f);};
+                const st={marginLeft:8,marginBottom:6,borderRadius:20,padding:"3px 12px",fontSize:12,fontWeight:700,whiteSpace:"nowrap",cursor:"pointer",fontFamily:"inherit"};
+                return(<>
+                  {erpN>0&&<button onClick={()=>go("ERP미입력")} style={{...st,background:"rgba(220,120,40,.2)",border:"1px solid #d0803055",color:"#f0b070"}}>⚠ ERP 미입력 {erpN}건</button>}
+                  {whN>0&&<button onClick={()=>go("창고미입력")} style={{...st,background:"rgba(60,160,120,.18)",border:"1px solid #5aaf8a55",color:"#8edfb8"}}>⚠ 창고이동 미입력 {whN}건</button>}
+                </>);
               })()}
             </div>
 
-            {/* 완료 탭 — 라인 필터 (전체/A라인/B라인) */}
+            {/* 완료 탭 — 필터 (처리 상태 / 라인) */}
             {orderTab==="완료"&&(()=>{
               const doneAll=viewOrders.filter(o=>o.status==="완료");
-              const doneA=doneAll.filter(o=>(o.line||"A")==="A");
-              const doneB=doneAll.filter(o=>o.line==="B");
+              const opts=[
+                ["전체","⚪ 전체",doneAll.length,"#6fcf97"],
+                ["A","🟢 A라인",doneAll.filter(o=>(o.line||"A")==="A").length,"#8ecf90"],
+                ["B","🔵 B라인",doneAll.filter(o=>o.line==="B").length,"#8ac8f0"],
+                ["ERP미입력","🖥 ERP 미입력",doneAll.filter(o=>!o.erp_done).length,"#8ac8f0"],
+                ["창고미입력","🏭 창고이동 미입력",doneAll.filter(whPending).length,"#8edfb8"],
+                ["미처리","📌 미처리(ERP·창고)",doneAll.filter(o=>!o.erp_done||whPending(o)).length,"#f0b070"],
+              ];
               return(
                 <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
-                  <span style={{color:"#a8b8a0",fontSize:13,fontWeight:700}}>라인 필터:</span>
-                  {[
-                    ["전체",doneAll.length,"#6fcf97"],
-                    ["A",doneA.length,"#8ecf90"],
-                    ["B",doneB.length,"#8ac8f0"],
-                    ["미입력",doneAll.filter(o=>!o.erp_done).length,"#f0b070"],
-                  ].map(([l,cnt,color])=>(
-                    <button key={l} onClick={()=>setDoneLineFilter(l)}
-                      style={{background:doneLineFilter===l?color+"33":"rgba(255,255,255,.06)",border:"1px solid "+(doneLineFilter===l?color+"88":"#7a8a7044"),borderRadius:20,color:doneLineFilter===l?color:"#c8c8b8",padding:"5px 16px",fontSize:13,fontWeight:doneLineFilter===l?700:400,cursor:"pointer",fontFamily:"inherit"}}>
-                      {l==="전체"?"⚪ 전체":l==="A"?"🟢 A라인":l==="B"?"🔵 B라인":"⚠ ERP 미입력"} <span style={{marginLeft:4,opacity:.8}}>{cnt}건</span>
+                  <span style={{color:"#a8b8a0",fontSize:13,fontWeight:700}}>필터:</span>
+                  {opts.map(([k,l,cnt,color])=>(
+                    <button key={k} onClick={()=>{setDoneLineFilter(k);setCheckedOrders(new Set());}}
+                      style={{background:doneLineFilter===k?color+"33":"rgba(255,255,255,.06)",border:"1px solid "+(doneLineFilter===k?color+"88":"#7a8a7044"),borderRadius:20,color:doneLineFilter===k?color:"#c8c8b8",padding:"5px 16px",fontSize:13,fontWeight:doneLineFilter===k?700:400,cursor:"pointer",fontFamily:"inherit"}}>
+                      {l} <span style={{marginLeft:4,opacity:.8}}>{cnt}건</span>
                     </button>
                   ))}
                 </div>
@@ -4334,87 +4607,8 @@ function App(){
                   }finally{resumePoll();}
                 }} style={{background:"linear-gradient(135deg,#7a6020,#b08a30)",border:"1px solid #c8a06a66",borderRadius:6,color:"#f5e8a0",padding:"4px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>📋 선택 생산확정 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
                 {/* ★ 선택 회수: 투입완료 → 대기 (낱개 재고 복구) */}
-                <button onClick={()=>{
-                  if(!checkedOrders.size)return alert("회수할 항목을 선택하세요.");
-                  const ids=[...checkedOrders].filter(id=>orders.find(o=>o.id===id)?.status==="투입완료");
-                  if(!ids.length)return alert("투입완료 상태 항목만 회수할 수 있습니다.");
-                  askPw("선택 투입 회수","선택된 "+ids.length+"건의 낱개 재고가 복구되고 대기 상태로 돌아갑니다.",async()=>{
-                    pollPaused.current=true;
-                    try{
-                    // ★ UI 즉시 반영
-                    setOrders(prev=>prev.map(o=>ids.includes(o.id)?{...o,status:"대기",detail:null}:o));
-                    setCheckedOrders(new Set());
-                    // ★ 재고 복구 누적 계산 후 병렬 처리
-                    const stockDelta={};
-                    const logIds=[];
-                    const orderIds=[];
-                    for(const id of ids){
-                      const order=orders.find(o=>o.id===id);if(!order)continue;
-                      if(order.detail?.details){
-                        for(const d of order.detail.details)for(const u of (d.used||[])){
-                          stockDelta[u.id]=(stockDelta[u.id]||0)+u.qty;
-                        }
-                      }
-                      if(order.detail?.logId)logIds.push(order.detail.logId);
-                      orderIds.push(id);
-                    }
-                    const updatedStock=[...stock];
-                    const stockUpdates=Object.entries(stockDelta).map(([sid,delta])=>{
-                      const idx=updatedStock.findIndex(s=>String(s.id)===sid);
-                      if(idx!==-1){const restored=updatedStock[idx].qty+delta;updatedStock[idx]={...updatedStock[idx],qty:restored};return sb.from("drip2_stock").update({qty:restored}).eq("id",sid);}
-                    }).filter(Boolean);
-                    setStock(updatedStock);
-                    // ★ logId + order_id 둘 다로 로그 삭제
-                    setProdLog(prev=>prev.filter(l=>!logIds.includes(l.id)&&!orderIds.includes(l.order_id)));
-                    await Promise.all([
-                      ...stockUpdates,
-                      ...logIds.map(lid=>sb.from("drip2_prod_log").delete().eq("id",lid)),
-                      ...orderIds.filter(oid=>!logIds.length).map(oid=>sb.from("drip2_prod_log").delete().eq("order_id",oid)),
-                      ...ids.map(id=>sb.from("drip2_orders").update({status:"대기",detail:null}).eq("id",id)),
-                    ]);
-                    }finally{resumePoll();}
-                  });
-                }} style={{background:"rgba(90,130,200,.25)",border:"1px solid #5a8fc055",borderRadius:6,color:"#8ac8d8",padding:"4px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>↩ 선택 회수 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
-                <button onClick={()=>{
-                  if(!checkedOrders.size)return alert("삭제할 항목을 선택하세요.");
-                  askPw("선택 주문 삭제","선택된 "+checkedOrders.size+"건을 삭제합니다. 투입완료 항목은 재고가 복구됩니다.",async()=>{
-                    pollPaused.current=true;
-                    try{
-                    const ids=[...checkedOrders];
-                    // ★ UI 즉시 반영
-                    setOrders(prev=>prev.filter(o=>!ids.includes(o.id)));
-                    setCheckedOrders(new Set());
-                    // ★ 재고 복구 누적 계산 후 병렬 처리
-                    const stockDelta={};
-                    const logIds=[];
-                    const orderIds=[];
-                    for(const id of ids){
-                      const order=orders.find(o=>o.id===id);if(!order)continue;
-                      if(order.status==="투입완료"&&order.detail?.details){
-                        for(const d of order.detail.details)for(const u of (d.used||[])){
-                          stockDelta[u.id]=(stockDelta[u.id]||0)+u.qty;
-                        }
-                        if(order.detail?.logId)logIds.push(order.detail.logId);
-                        orderIds.push(id); // order_id 기준 삭제용
-                      }
-                    }
-                    const updatedStock=[...stock];
-                    const stockUpdates=Object.entries(stockDelta).map(([sid,delta])=>{
-                      const idx=updatedStock.findIndex(s=>String(s.id)===sid);
-                      if(idx!==-1){const restored=updatedStock[idx].qty+delta;updatedStock[idx]={...updatedStock[idx],qty:restored};return sb.from("drip2_stock").update({qty:restored}).eq("id",sid);}
-                    }).filter(Boolean);
-                    setStock(updatedStock);
-                    // ★ logId + order_id 둘 다로 로그 삭제
-                    setProdLog(prev=>prev.filter(l=>!logIds.includes(l.id)&&!orderIds.includes(l.order_id)));
-                    await Promise.all([
-                      ...stockUpdates,
-                      ...logIds.map(lid=>sb.from("drip2_prod_log").delete().eq("id",lid)),
-                      ...orderIds.filter(oid=>!logIds.length).map(oid=>sb.from("drip2_prod_log").delete().eq("order_id",oid)),
-                      ...ids.map(id=>sb.from("drip2_orders").delete().eq("id",id)),
-                    ]);
-                    }finally{resumePoll();}
-                  });
-                }} style={{background:"rgba(160,60,60,.3)",border:"1px solid #c0606055",borderRadius:6,color:"#f08080",padding:"4px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>🗑 선택 삭제 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
+                <button onClick={()=>bulkToWaiting([...checkedOrders],["투입완료"])} style={{background:"rgba(90,130,200,.25)",border:"1px solid #5a8fc055",borderRadius:6,color:"#8ac8d8",padding:"4px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>↩ 선택 회수 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
+                <button onClick={()=>bulkDelete([...checkedOrders])} style={{background:"rgba(160,60,60,.3)",border:"1px solid #c0606055",borderRadius:6,color:"#f08080",padding:"4px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>🗑 선택 삭제 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
               </div>
             )}
 
@@ -4436,87 +4630,8 @@ function App(){
                     }finally{resumePoll();}
                   }});
                 }} style={{background:"linear-gradient(135deg,#2d6a2d,#3a8a3a)",border:"1px solid #4caf5066",borderRadius:6,color:"#6fcf97",padding:"4px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>✅ 선택 완료 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
-                <button onClick={()=>{
-                  if(!checkedOrders.size)return alert("복귀할 항목을 선택하세요.");
-                  askPw("선택 생산계획 복귀","선택된 "+checkedOrders.size+"건의 재고가 복구되고 생산계획으로 돌아갑니다.",async()=>{
-                    pollPaused.current=true;
-                    try{
-                    const ids=[...checkedOrders].map(String);
-                    // ★ UI 즉시 반영
-                    setOrders(prev=>prev.map(o=>ids.includes(String(o.id))?{...o,status:"대기",detail:null}:o));
-                    setCheckedOrders(new Set());
-                    setOrderTab("생산계획");
-                    // ★ 재고 복구 누적 계산
-                    const stockDelta={};
-                    const logIds=[];
-                    const orderIds=[];
-                    for(const id of ids){
-                      const order=orders.find(o=>String(o.id)===id);if(!order)continue;
-                      if(order.detail?.details){
-                        for(const d of order.detail.details)for(const u of (d.used||[])){
-                          stockDelta[u.id]=(stockDelta[u.id]||0)+u.qty;
-                        }
-                      }
-                      if(order.detail?.logId)logIds.push(order.detail.logId);
-                      orderIds.push(id);
-                    }
-                    const updatedStock=[...stock];
-                    const stockUpdates=Object.entries(stockDelta).map(([sid,delta])=>{
-                      const idx=updatedStock.findIndex(s=>String(s.id)===sid);
-                      if(idx!==-1){const restored=updatedStock[idx].qty+delta;updatedStock[idx]={...updatedStock[idx],qty:restored};return sb.from("drip2_stock").update({qty:restored}).eq("id",sid);}
-                    }).filter(Boolean);
-                    setStock(updatedStock);
-                    // ★ logId + order_id 둘 다로 로그 삭제
-                    setProdLog(prev=>prev.filter(l=>!logIds.includes(l.id)&&!orderIds.includes(l.order_id)));
-                    await Promise.all([
-                      ...stockUpdates,
-                      ...logIds.map(lid=>sb.from("drip2_prod_log").delete().eq("id",lid)),
-                      ...orderIds.map(oid=>sb.from("drip2_prod_log").delete().eq("order_id",oid)),
-                      ...ids.map(id=>sb.from("drip2_orders").update({status:"대기",detail:null}).eq("id",id)),
-                    ]);
-                    }finally{resumePoll();}
-                  });
-                }} style={{background:"rgba(90,130,200,.25)",border:"1px solid #5a8fc055",borderRadius:6,color:"#8ac8d8",padding:"4px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>🔄 선택 복귀 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
-                <button onClick={()=>{
-                  if(!checkedOrders.size)return alert("삭제할 항목을 선택하세요.");
-                  askPw("선택 주문 삭제","선택된 "+checkedOrders.size+"건을 삭제합니다. 낱개 재고가 복구됩니다.",async()=>{
-                    pollPaused.current=true;
-                    try{
-                    const ids=[...checkedOrders];
-                    // ★ UI 즉시 반영
-                    setOrders(prev=>prev.filter(o=>!ids.includes(o.id)));
-                    setCheckedOrders(new Set());
-                    // ★ 재고 복구 누적 계산 후 병렬 처리
-                    const stockDelta={};
-                    const logIds=[];
-                    const orderIds=[];
-                    for(const id of ids){
-                      const order=orders.find(o=>o.id===id);if(!order)continue;
-                      if(order.detail?.details){
-                        for(const d of order.detail.details)for(const u of (d.used||[])){
-                          stockDelta[u.id]=(stockDelta[u.id]||0)+u.qty;
-                        }
-                        if(order.detail?.logId)logIds.push(order.detail.logId);
-                        orderIds.push(id);
-                      }
-                    }
-                    const updatedStock=[...stock];
-                    const stockUpdates=Object.entries(stockDelta).map(([sid,delta])=>{
-                      const idx=updatedStock.findIndex(s=>String(s.id)===sid);
-                      if(idx!==-1){const restored=updatedStock[idx].qty+delta;updatedStock[idx]={...updatedStock[idx],qty:restored};return sb.from("drip2_stock").update({qty:restored}).eq("id",sid);}
-                    }).filter(Boolean);
-                    setStock(updatedStock);
-                    // ★ logId + order_id 둘 다로 로그 삭제
-                    setProdLog(prev=>prev.filter(l=>!logIds.includes(l.id)&&!orderIds.includes(l.order_id)));
-                    await Promise.all([
-                      ...stockUpdates,
-                      ...logIds.map(lid=>sb.from("drip2_prod_log").delete().eq("id",lid)),
-                      ...orderIds.filter(oid=>!logIds.length).map(oid=>sb.from("drip2_prod_log").delete().eq("order_id",oid)),
-                      ...ids.map(id=>sb.from("drip2_orders").delete().eq("id",id)),
-                    ]);
-                    }finally{resumePoll();}
-                  });
-                }} style={{background:"rgba(160,60,60,.3)",border:"1px solid #c0606055",borderRadius:6,color:"#f08080",padding:"4px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>🗑 선택 삭제 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
+                <button onClick={()=>bulkToWaiting([...checkedOrders],["확정"])} style={{background:"rgba(90,130,200,.25)",border:"1px solid #5a8fc055",borderRadius:6,color:"#8ac8d8",padding:"4px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>🔄 선택 복귀 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
+                <button onClick={()=>bulkDelete([...checkedOrders])} style={{background:"rgba(160,60,60,.3)",border:"1px solid #c0606055",borderRadius:6,color:"#f08080",padding:"4px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>🗑 선택 삭제 {checkedOrders.size>0?"("+checkedOrders.size+"건)":""}</button>
               </div>
             )}
 
@@ -4531,7 +4646,7 @@ function App(){
                       <OrderCard order={order} pName={pName} sName={sName} fmtDate={fmtDate}
                         invest={invest} delOrder={delOrder} updateOrder={updateOrder}
                         confirmOrder={confirmOrder} completeOrder={completeOrder} revertOrder={revertOrder} cancelOrder={cancelOrder}
-                        markErpDone={markErpDone}
+                        markProc={markProc} undoProc={undoProc}
                         primaryBtn={primaryBtn} delBtn={delBtn}
                         moveOrder={moveOrder} isFirst={idx===0} isLast={idx===arr.length-1}
                         channels={channels} shipTypeNames={shipTypeNames}/>
@@ -4636,7 +4751,7 @@ function App(){
                               <OrderCard order={order} pName={pName} sName={sName} fmtDate={fmtDate}
                                 invest={invest} delOrder={delOrder} updateOrder={updateOrder}
                                 confirmOrder={confirmOrder} completeOrder={completeOrder} revertOrder={revertOrder} cancelOrder={cancelOrder} addExtraQty={addExtraQty}
-                                markErpDone={markErpDone}
+                                markProc={markProc} undoProc={undoProc}
                                 primaryBtn={primaryBtn} delBtn={delBtn}
                                 moveOrder={null} isFirst={idx===0} isLast={idx===confirmedList.length-1}
                                 channels={channels} shipTypeNames={shipTypeNames}/>
@@ -4649,20 +4764,36 @@ function App(){
                 </div>
             )}
 
-            {/* 완료 목록 */}
+            {/* 완료 목록 — ERP 입력 / 창고이동 처리 (처리자 성함 기록) */}
             {orderTab==="완료"&&(()=>{
-              const doneFiltered=viewOrders.filter(o=>o.status==="완료").filter(o=>doneLineFilter==="전체"?true:doneLineFilter==="미입력"?!o.erp_done:(doneLineFilter==="A"?(o.line||"A")==="A":o.line==="B"));
-              return doneFiltered.length===0
-                ?<div style={{textAlign:"center",color:"#909888",padding:26,fontSize:14}}>완료 주문이 없습니다.</div>
-                :doneFiltered.map((order,idx,arr)=>(
-                  <OrderCard key={order.id} order={order} pName={pName} sName={sName} fmtDate={fmtDate}
-                    invest={invest} delOrder={delOrder} updateOrder={updateOrder}
-                    confirmOrder={confirmOrder} completeOrder={completeOrder} revertOrder={revertOrder} cancelOrder={cancelOrder}
-                    markErpDone={markErpDone}
-                    primaryBtn={primaryBtn} delBtn={delBtn}
-                    moveOrder={null} isFirst={idx===0} isLast={idx===arr.length-1}
-                    channels={channels} shipTypeNames={shipTypeNames}/>
-                ));
+              const doneFiltered=viewOrders.filter(o=>o.status==="완료").filter(doneFilterFn);
+              if(doneFiltered.length===0)return<div style={{textAlign:"center",color:"#909888",padding:26,fontSize:14}}>{doneLineFilter==="미처리"&&viewOrders.some(o=>o.status==="완료")?"✅ 이 날짜는 ERP·창고이동 처리가 모두 끝났어요.":"해당하는 완료 주문이 없습니다."}</div>;
+              const selIds=doneFiltered.filter(o=>checkedOrders.has(o.id)).map(o=>o.id);
+              const bb={border:"1px solid #7a8a7055",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"};
+              return(<>
+                <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:12,padding:"8px 14px",background:"rgba(255,255,255,.05)",border:"1px solid #7a8a7044",borderRadius:8,flexWrap:"wrap"}}>
+                  <span style={{color:"#a8b8a0",fontSize:13,fontWeight:700}}>다중 선택:</span>
+                  <button onClick={()=>checkAll(doneFiltered.map(o=>o.id))} style={{...bb,background:"rgba(255,255,255,.1)",color:"#d8ecca"}}>☑ 전체 ({doneFiltered.length})</button>
+                  <button onClick={uncheckAll} style={{...bb,background:"rgba(255,255,255,.1)",color:"#d8ecca"}}>☐ 해제</button>
+                  <button onClick={()=>selIds.length?markProc(selIds,"erp"):alert("항목을 선택하세요.")} style={{...bb,background:"linear-gradient(135deg,#4a5a8a,#6a7ac0)",border:"1px solid #8ac8f066",color:"#eaf0ff",fontWeight:700,padding:"4px 16px"}}>🖥 선택 ERP 입력완료 {selIds.length?"("+selIds.length+"건)":""}</button>
+                  <button onClick={()=>selIds.length?markProc(selIds,"wh"):alert("항목을 선택하세요.")} style={{...bb,background:"linear-gradient(135deg,#3a6a52,#4a9a72)",border:"1px solid #8edfb866",color:"#f4fff8",fontWeight:700,padding:"4px 16px"}}>🏭 선택 창고이동 완료 {selIds.length?"("+selIds.length+"건)":""}</button>
+                  <span style={{fontSize:11,color:"#8a9a88"}}>처리할 때 처리자 성함을 입력해요</span>
+                </div>
+                {doneFiltered.map((order,idx,arr)=>(
+                  <div key={order.id} style={{display:"flex",alignItems:"flex-start",gap:8}}>
+                    <div style={{paddingTop:15,flexShrink:0}}><input type="checkbox" checked={checkedOrders.has(order.id)} onChange={()=>toggleCheck(order.id)} style={{width:18,height:18,cursor:"pointer",accentColor:"#8edfb8"}}/></div>
+                    <div style={{flex:1}}>
+                      <OrderCard order={order} pName={pName} sName={sName} fmtDate={fmtDate}
+                        invest={invest} delOrder={delOrder} updateOrder={updateOrder}
+                        confirmOrder={confirmOrder} completeOrder={completeOrder} revertOrder={revertOrder} cancelOrder={cancelOrder}
+                        markProc={markProc} undoProc={undoProc}
+                        primaryBtn={primaryBtn} delBtn={delBtn}
+                        moveOrder={null} isFirst={idx===0} isLast={idx===arr.length-1}
+                        channels={channels} shipTypeNames={shipTypeNames}/>
+                    </div>
+                  </div>
+                ))}
+              </>);
             })()}
           </div>
         )}
@@ -4880,6 +5011,71 @@ function App(){
             </Tbl>
           </div>
         )}
+
+        {/* ════ 취소·복귀 로그 ════ */}
+        {tab==="취소복귀로그"&&(()=>{
+          const t0=today();
+          const presets=[["오늘",t0,t0],["최근 7일",addDays(t0,-6),t0],["최근 1개월",addDays(t0,-30),t0],["최근 3개월",addDays(t0,-90),t0]];
+          const inType=(l,k)=>k==="전체"?true:ACT_GROUPS[k]?ACT_GROUPS[k].includes(l.action):l.action===k;
+          const types=["전체","취소·복귀","ERP·창고처리",...Object.keys(ACT_COLOR).filter(a=>actionLog.some(l=>l.action===a))];
+          const q=actLogQ.trim().toLowerCase();
+          const list=actionLog.filter(l=>inType(l,actLogType)&&(!q||[l.p_code,l.p_name,l.channel,l.actor,l.user_id,l.reason,l.lot,l.action].join(" ").toLowerCase().includes(q)));
+          const restoredTxt=l=>(l.detail?.restored||[]).map(r=>sName(r.sCode)+" "+fmtDate(r.expiry)+"("+r.qty+")").join(", ");
+          const fmtTs=ts=>new Date(ts).toLocaleString("ko-KR",{timeZone:"Asia/Seoul"});
+          const exportX=()=>{
+            if(!list.length)return alert("내보낼 기록이 없어요.");
+            const rows=[["시각","구분","이전","변경후","제품코드","제품명","업체","수량","라인","생산일","LOT","처리자","로그인계정","사유","재고 복구 내역"]];
+            list.forEach(l=>rows.push([fmtTs(l.created_at),l.action,l.from_status||"",l.to_status||"",l.p_code||"",l.p_name||"",l.channel||"",l.qty??"",l.line||"",l.plan_date||"",l.lot||"",l.actor||"",l.user_id||"",l.reason||"",restoredTxt(l)]));
+            const ws=XLSX.utils.aoa_to_sheet(rows);ws["!cols"]=[{wch:20},{wch:12},{wch:14},{wch:14},{wch:10},{wch:28},{wch:16},{wch:7},{wch:5},{wch:11},{wch:12},{wch:10},{wch:10},{wch:24},{wch:40}];
+            const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"취소복귀로그");
+            XLSX.writeFile(wb,"취소복귀로그_"+actLogRange.from+"_"+actLogRange.to+".xlsx");
+          };
+          const missing=/drip2_action_log|relation|does not exist|schema cache/i.test(actLogErr);
+          return(
+          <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+              <SecTitle icon="📝" title="취소·복귀 로그"/>
+              <button onClick={exportX} style={{background:"#1a4020",border:"1px solid #4caf5055",borderRadius:6,color:"#6fcf97",padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>⬇ 엑셀 다운로드</button>
+            </div>
+            <div style={{fontSize:12,color:"#a8b8a0",marginBottom:12,lineHeight:1.6}}>투입회수 · 생산계획/생산확정 복귀 · 생산취소 · 주문삭제 · 생산로그 삭제, 그리고 ERP 입력 · 창고이동 처리(완료/취소)가 처리자 성함과 함께 자동으로 남아요. 기록은 수정·삭제할 수 없어요.</div>
+            {actLogErr&&<div style={{padding:"10px 14px",background:"rgba(224,80,80,.12)",border:"1px solid #e0505066",borderRadius:8,fontSize:12,color:"#f0a0a0",marginBottom:12}}>⚠️ {missing?"취소·복귀 로그 테이블(drip2_action_log)이 아직 없어요. Supabase SQL Editor에서 최초 1회 SQL을 실행해주세요.":"조회 오류: "+actLogErr}</div>}
+            <div style={{background:"rgba(255,255,255,.05)",border:"1px solid #7a8a7044",borderRadius:10,padding:"12px 16px",marginBottom:12}}>
+              <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                <span style={{color:"#c8ddb8",fontWeight:700,fontSize:13}}>📅 기간</span>
+                <input type="date" value={actLogDraft.from} max={actLogDraft.to||undefined} onChange={e=>setActLogDraft(d=>({...d,from:e.target.value}))} style={{...inp,width:150}}/>
+                <span style={{color:"#8a9a88"}}>~</span>
+                <input type="date" value={actLogDraft.to} min={actLogDraft.from||undefined} onChange={e=>setActLogDraft(d=>({...d,to:e.target.value}))} style={{...inp,width:150}}/>
+                <button onClick={()=>applyActLogRange(actLogDraft.from,actLogDraft.to)} style={{...primaryBtn,padding:"6px 16px",fontSize:13}}>🔍 조회</button>
+                <input value={actLogQ} onChange={e=>setActLogQ(e.target.value)} placeholder="🔍 제품·업체·처리자·사유 검색" style={{...inp,width:220}}/>
+                <span style={{fontSize:12,color:"#8a9a88",marginLeft:"auto"}}>{actLogLoading?"불러오는 중...":actLogRange.from+" ~ "+actLogRange.to+" · "+list.length+"건"}</span>
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>
+                {presets.map(([l,f,tt])=>{const on=actLogRange.from===f&&actLogRange.to===tt;return(
+                  <button key={l} onClick={()=>applyActLogRange(f,tt)} style={{padding:"4px 12px",borderRadius:20,border:"1px solid "+(on?"#6a8a5a":"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:on?"#6a8a5a":"rgba(255,255,255,.06)",color:on?"#fff":"#c8c8b8",fontWeight:on?700:400}}>{l}</button>);})}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+              {types.map(k=>{const on=actLogType===k;const c=ACT_COLOR[k]||"#f5c97a";const n=actionLog.filter(l=>inType(l,k)).length;return(
+                <button key={k} onClick={()=>setActLogType(k)} style={{padding:"4px 12px",borderRadius:20,border:"1px solid "+(on?c:"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:on?"rgba(255,255,255,.12)":"rgba(255,255,255,.04)",color:on?c:"#c8c8b8",fontWeight:on?700:400}}>{k} <span style={{opacity:.75}}>{n}</span></button>);})}
+            </div>
+            <Tbl headers={["시각","구분","상태 변화","완제품","업체","수량","LOT","처리자","사유","재고 복구"]}>
+              {list.map(l=>{const c=ACT_COLOR[l.action]||"#c8c8b8";return(
+                <tr key={l.id}>
+                  <Td style={{fontSize:12,color:"#9a8060",whiteSpace:"nowrap"}}>{fmtTs(l.created_at)}</Td>
+                  <Td><span style={{background:"rgba(255,255,255,.06)",border:"1px solid "+c+"66",color:c,borderRadius:6,padding:"2px 9px",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>{l.action}</span></Td>
+                  <Td style={{fontSize:12,color:"#c8c8b8",whiteSpace:"nowrap"}}>{l.from_status||"-"} → <b style={{color:"#e8f0e0"}}>{l.to_status||"-"}</b></Td>
+                  <Td>{l.p_code?<><div style={{color:"#9a7050",fontSize:11}}>[{l.p_code}]{l.plan_date?" · 생산 "+l.plan_date:""}{l.line?" · "+l.line+"라인":""}</div><div style={{color:"#f5c97a",fontWeight:600}}>{l.p_name||pName(l.p_code)}</div></>:"-"}</Td>
+                  <Td style={{fontSize:12}}>{l.channel||"-"}</Td>
+                  <Td>{l.qty!=null?Number(l.qty).toLocaleString()+"개":"-"}</Td>
+                  <Td style={{color:"#f5c97a",fontWeight:700}}>{l.lot||"-"}</Td>
+                  <Td><div style={{color:"#e8f0e0",fontWeight:700}}>👤 {l.actor||"-"}</div>{l.user_id&&<div style={{fontSize:11,color:"#8a9a88"}}>계정 {l.user_id}</div>}</Td>
+                  <Td style={{fontSize:12,color:"#e8dcc0",maxWidth:220}}>{l.reason||<span style={{color:"#6a7a68"}}>-</span>}</Td>
+                  <Td style={{fontSize:11,color:"#a8c8c0",maxWidth:260}}>{restoredTxt(l)||<span style={{color:"#6a7a68"}}>-</span>}</Td>
+                </tr>);})}
+              {list.length===0&&<tr><Td colSpan={10} style={{textAlign:"center",color:"#8a9a88",padding:22}}>{actLogLoading?"불러오는 중...":"이 기간에 기록이 없어요."}</Td></tr>}
+            </Tbl>
+          </div>);
+        })()}
 
         {/* ════ 분석 ════ */}
         {tab==="분석"&&(
@@ -5159,7 +5355,7 @@ function App(){
         {tab==="분석2"&&(
           <div>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-              <SecTitle icon="📊" title="분석2 — 요일별 생산량 · 업체별 낱개"/>
+              <SecTitle icon="📊" title="분석2 — 요일별 · 업체별 · 낱개 종류별 사용량 (낱개 기준)"/>
               <button onClick={exportAnalysis2Excel} style={{background:"#1a4020",border:"1px solid #4caf5055",borderRadius:6,color:"#6fcf97",padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>⬇ 엑셀 다운로드</button>
             </div>
 
@@ -5169,7 +5365,7 @@ function App(){
               const lastMonthEnd=addDays(m+"-01",-1),lastMonthStart=lastMonthEnd.slice(0,7)+"-01";
               const presets=[
                 ["최근 1주",addDays(t,-6),t],["최근 1개월",addDays(t,-30),t],["최근 3개월",addDays(t,-90),t],["최근 6개월",addDays(t,-182),t],
-                ["이번 달",m+"-01",t],["지난 달",lastMonthStart,lastMonthEnd],["올해",y+"-01-01",t],
+                ["최근 1년",addDays(t,-364),t],["이번 달",m+"-01",t],["지난 달",lastMonthStart,lastMonthEnd],["올해",y+"-01-01",t],
               ];
               const days=daysBetween(a2Range.from,a2Range.to);
               const dirty=a2Draft.from!==a2Range.from||a2Draft.to!==a2Range.to;
@@ -5196,23 +5392,27 @@ function App(){
 
             {/* 보기 옵션 */}
             <div style={{display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:18,fontSize:13}}>
-              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                <span style={{color:"#a8b8a0",fontWeight:700}}>기준</span>
-                {[["unit","📦 낱개"],["qty","🎁 완제품"]].map(([k,l])=>(
-                  <button key={k} onClick={()=>setA2Metric(k)} style={{padding:"4px 12px",borderRadius:20,border:"1px solid "+(a2Metric===k?"#4db6ac":"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:a2Metric===k?"rgba(77,182,172,.2)":"rgba(255,255,255,.06)",color:a2Metric===k?"#4db6ac":"#c8c8b8",fontWeight:a2Metric===k?700:400}}>{l}</button>
-                ))}
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                <span style={{color:"#a8b8a0",fontWeight:700}}>요일 값</span>
-                {[["avg","생산일 평균"],["sum","합계"]].map(([k,l])=>(
-                  <button key={k} onClick={()=>setA2Mode(k)} style={{padding:"4px 12px",borderRadius:20,border:"1px solid "+(a2Mode===k?"#f5c97a":"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:a2Mode===k?"rgba(245,201,122,.15)":"rgba(255,255,255,.06)",color:a2Mode===k?"#f5c97a":"#c8c8b8",fontWeight:a2Mode===k?700:400}}>{l}</button>
-                ))}
-              </div>
+              {a2View!=="single"?(
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{color:"#a8b8a0",fontWeight:700}}>요일 값</span>
+                  {[["avg","생산일 평균"],["sum","합계"]].map(([k,l])=>(
+                    <button key={k} onClick={()=>setA2Mode(k)} style={{padding:"4px 12px",borderRadius:20,border:"1px solid "+(a2Mode===k?"#f5c97a":"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:a2Mode===k?"rgba(245,201,122,.15)":"rgba(255,255,255,.06)",color:a2Mode===k?"#f5c97a":"#c8c8b8",fontWeight:a2Mode===k?700:400}}>{l}</button>
+                  ))}
+                </div>
+              ):(
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{color:"#a8b8a0",fontWeight:700}}>집계 단위</span>
+                  {Object.entries(A2_GRAN).map(([k,l])=>(
+                    <button key={k} onClick={()=>setA2Gran(k)} style={{padding:"4px 12px",borderRadius:20,border:"1px solid "+(a2Gran===k?"#f5c97a":"#7a8a7044"),cursor:"pointer",fontFamily:"inherit",fontSize:12,background:a2Gran===k?"rgba(245,201,122,.15)":"rgba(255,255,255,.06)",color:a2Gran===k?"#f5c97a":"#c8c8b8",fontWeight:a2Gran===k?700:400}}>{l}</button>
+                  ))}
+                  <span style={{fontSize:11,color:"#8a9a88",marginLeft:4}}>분기별은 기간을 "최근 1년"·"올해"로 넓혀서 보세요</span>
+                </div>
+              )}
             </div>
 
             {/* 세부탭 */}
             <div style={{display:"flex",gap:0,marginBottom:20,borderBottom:"2px solid #6a8a5a33"}}>
-              {[["overview","📅 요일·전체 현황"],["bych","🏢 업체별 생산 추이"]].map(([k,l])=>(
+              {[["overview","📅 요일·전체 현황"],["bych","🏢 업체별 생산 추이"],["single","🧩 낱개 종류별 사용"]].map(([k,l])=>(
                 <button key={k} onClick={()=>setA2View(k)} style={{padding:"9px 20px",border:"none",borderBottom:"3px solid "+(a2View===k?"#f5c97a":"transparent"),marginBottom:-2,background:"transparent",cursor:"pointer",fontFamily:"inherit",fontSize:14,fontWeight:a2View===k?700:400,color:a2View===k?"#f5c97a":"#a8b8a0"}}>{l}</button>
               ))}
             </div>
@@ -5221,7 +5421,6 @@ function App(){
             {/* KPI */}
             <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:24}}>
               <KpiCard icon="📦" label="총 낱개 생산" value={a2TotalUnit.toLocaleString()+"개"} color="#4db6ac"/>
-              <KpiCard icon="🎁" label="총 완제품 생산" value={a2TotalQty.toLocaleString()+"개"}/>
               <KpiCard icon="📅" label="생산일수 / 일평균 낱개" value={a2ProdDays+"일"} sub={"하루 평균 낱개 "+(a2ProdDays?a2Fmt(a2TotalUnit/a2ProdDays):0)+"개"}/>
               <KpiCard icon="🏆" label="가장 많이 만드는 요일" value={a2BestWd!=null?WEEKDAY_KR[a2BestWd]+"요일":"-"} sub={a2BestWd!=null?("생산일 평균 "+a2Fmt(a2Pick(a2Wd[a2BestWd])/a2Wd[a2BestWd].days.size)+a2Unit):""} color="#6fcf97"/>
             </div>
@@ -5230,13 +5429,11 @@ function App(){
             <div style={{marginBottom:28}}>
               <SecTitle icon="📅" title={"요일별 생산량 ("+(a2Mode==="avg"?"생산일 평균":"합계")+" · "+(a2Metric==="unit"?"낱개":"완제품")+")"}/>
               <StackedBarChart data={a2WdChart} unit="개" height={220}/>
-              <Tbl headers={["요일","생산일수","완제품 합계","완제품 일평균","낱개 합계","낱개 일평균","낱개 비중"]}>
+              <Tbl headers={["요일","생산일수","낱개 합계","낱개 일평균","낱개 비중"]}>
                 {a2WdShow.map(w=>{const W=a2Wd[w],n=W.days.size,share=a2TotalUnit?W.unit/a2TotalUnit*100:0;return(
                   <tr key={w}>
                     <Td style={{color:w===0?"#e89090":w===6?"#8ac8f0":"#f5c97a",fontWeight:700}}>{WEEKDAY_KR[w]}요일</Td>
                     <Td>{n}일</Td>
-                    <Td>{W.qty.toLocaleString()}개</Td>
-                    <Td>{n?a2Fmt(W.qty/n):0}개</Td>
                     <Td>{W.unit.toLocaleString()}개</Td>
                     <Td style={{color:"#4db6ac",fontWeight:700}}>{n?a2Fmt(W.unit/n):0}개</Td>
                     <Td><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:80,height:6,background:"rgba(255,255,255,.08)",borderRadius:3,overflow:"hidden"}}><div style={{width:Math.min(share,100)+"%",height:"100%",background:"#4db6ac"}}/></div><span>{share.toFixed(1)}%</span></div></Td>
@@ -5244,8 +5441,6 @@ function App(){
                 <tr style={{background:"rgba(245,201,122,.06)"}}>
                   <Td style={{fontWeight:700,color:"#f5c97a"}}>합계</Td>
                   <Td style={{fontWeight:700}}>{a2ProdDays}일</Td>
-                  <Td style={{fontWeight:700}}>{a2TotalQty.toLocaleString()}개</Td>
-                  <Td>{a2ProdDays?a2Fmt(a2TotalQty/a2ProdDays):0}개</Td>
                   <Td style={{fontWeight:700}}>{a2TotalUnit.toLocaleString()}개</Td>
                   <Td>{a2ProdDays?a2Fmt(a2TotalUnit/a2ProdDays):0}개</Td>
                   <Td>100%</Td>
@@ -5297,7 +5492,7 @@ function App(){
               <SecTitle icon="📦" title="업체별 낱개 생산 현황"/>
               <BarRankChart unit="개" data={[...a2ChKeys].sort((a,b)=>a2Ch[b].unit-a2Ch[a].unit).map(k=>({label:k,value:a2Ch[k].unit,color:a2ChColor[k]}))}/>
               <div style={{marginTop:12}}>
-                <Tbl headers={["순위","업체","낱개 합계","낱개 비율","완제품 합계","생산일수","생산일 평균 낱개","많이 만드는 요일"]}>
+                <Tbl headers={["순위","업체","낱개 합계","낱개 비율","생산일수","생산일 평균 낱개","많이 만드는 요일"]}>
                   {[...a2ChKeys].sort((a,b)=>a2Ch[b].unit-a2Ch[a].unit).map((k,i)=>{const C=a2Ch[k];
                     const topW=Object.keys(C.wd).map(Number).sort((a,b)=>C.wd[b].unit-C.wd[a].unit)[0];
                     return(
@@ -5306,12 +5501,11 @@ function App(){
                       <Td><span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:a2ChColor[k],marginRight:6}}/>{k}</Td>
                       <Td style={{color:"#4db6ac",fontWeight:700}}>{C.unit.toLocaleString()}개</Td>
                       <Td>{a2TotalUnit?(C.unit/a2TotalUnit*100).toFixed(1):0}%</Td>
-                      <Td>{C.qty.toLocaleString()}개</Td>
                       <Td>{C.days.size}일</Td>
                       <Td>{C.days.size?a2Fmt(C.unit/C.days.size):0}개</Td>
                       <Td>{topW!=null?WEEKDAY_KR[topW]+"요일":"-"}</Td>
                     </tr>);})}
-                  {a2ChKeys.length===0&&<tr><Td colSpan={8} style={{textAlign:"center",color:"#8a9a88"}}>데이터가 없습니다.</Td></tr>}
+                  {a2ChKeys.length===0&&<tr><Td colSpan={7} style={{textAlign:"center",color:"#8a9a88"}}>데이터가 없습니다.</Td></tr>}
                 </Tbl>
               </div>
               {a2NoBom.length>0&&<div style={{marginTop:6,fontSize:11,color:"#e89090"}}>⚠️ BOM 미등록 제품 {a2NoBom.length}개({a2NoBom.slice(0,5).map(pName).join(", ")}{a2NoBom.length>5?" 외":""})은 낱개 0으로 계산돼요. "BOM관리" 탭에서 설정해주세요.</div>}
@@ -5326,6 +5520,128 @@ function App(){
             </>)}
 
             {/* ════ 세부탭: 업체별 생산 추이 ════ */}
+            {/* ════ 세부탭: 낱개 종류별 사용 ════ */}
+            {a2View==="single"&&(()=>{
+              const th={padding:"8px 10px",color:"#c8ddb8",fontWeight:600,fontSize:12.5,borderBottom:"1px solid #6a8a5a55",whiteSpace:"nowrap"};
+              const td={padding:"6px 10px",borderBottom:"1px solid #6a6a6444",verticalAlign:"middle"};
+              const num={...td,textAlign:"right",fontFamily:"monospace",whiteSpace:"nowrap"};
+              const dot=k=><span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:a2SColor[k],marginRight:6,verticalAlign:"middle"}}/>;
+              const coverColor=c=>c==null?"#8a9a88":c<2?"#ff8080":c<5?"#f5c97a":"#6fcf97";
+              const coverTxt=c=>c==null?"-":c>=365?"1년 이상":c.toFixed(1)+"일분";
+              const topK=a2SKeys[0];
+              if(!a2SKeys.length)return<div style={{color:"#8a9a88",fontSize:13,textAlign:"center",padding:30}}>{a2Loading?"불러오는 중...":"조회 기간에 생산완료(BOM 등록) 데이터가 없어요."}</div>;
+              const sel=a2SSel,S=sel?a2S[sel]:null,st=sel?a2SStat(sel):null;
+              return(<>
+                <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:22}}>
+                  <KpiCard icon="🧩" label="사용한 낱개 종류" value={a2SKeys.length+"종"} sub={a2SDays+"일 기간"}/>
+                  <KpiCard icon="📦" label="기간 총 사용량" value={a2Fmt(a2STotal)+"개"} color="#4db6ac"/>
+                  <KpiCard icon="📅" label="주평균 / 월평균" value={a2Fmt(a2STotal/(a2SDays/7))+"개"} sub={"월평균 "+a2Fmt(a2STotal/(a2SDays/30.44))+"개 · 분기평균 "+a2Fmt(a2STotal/(a2SDays/91.31))+"개"}/>
+                  <KpiCard icon="🏆" label="가장 많이 쓴 낱개" value={sName(topK)} sub={a2Fmt(a2S[topK].total)+"개 · "+(a2STotal?(a2S[topK].total/a2STotal*100).toFixed(1):0)+"%"} color="#6fcf97"/>
+                </div>
+
+                {/* ① 종류별 요약 */}
+                <div style={{marginBottom:26}}>
+                  <SecTitle icon="📋" title="낱개 종류별 사용 요약 (주·월·분기 평균 + 재고 소진 예상)"/>
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+                      <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
+                        {["순위","낱개","기간 합계","비중","주평균","월평균","분기평균","최대 주 사용량","일평균(생산일)","현재 재고","재고 소진 예상"].map((h,i)=><th key={h} style={{...th,textAlign:i>=2?"right":"left"}}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {a2SKeys.map((k,i)=>{const t=a2SStat(k);const on=sel===k;return(
+                          <tr key={k} onClick={()=>setA2SelS(on?"":k)} style={{cursor:"pointer",background:on?"rgba(200,130,26,.15)":"transparent"}}>
+                            <td style={td}>{i+1}</td>
+                            <td style={{...td,fontWeight:700,color:"#f5c97a",wordBreak:"keep-all"}}>{dot(k)}{sName(k)} <span style={{color:"#9a7050",fontSize:11,fontWeight:400}}>{k}</span></td>
+                            <td style={{...num,fontWeight:700,color:"#4db6ac"}}>{a2Fmt(a2S[k].total)}</td>
+                            <td style={num}>{a2STotal?(a2S[k].total/a2STotal*100).toFixed(1):0}%</td>
+                            <td style={{...num,color:"#f0f0e8",fontWeight:700}}>{a2Fmt(t.wAvg)}</td>
+                            <td style={num}>{a2Fmt(t.mAvg)}</td>
+                            <td style={num}>{a2Fmt(t.qAvg)}</td>
+                            <td style={num}>{a2Fmt(t.maxWk)}</td>
+                            <td style={{...num,color:"#f0f0e8"}}>{a2Fmt(t.dAvg)}</td>
+                            <td style={num}>{a2Fmt(t.stock)}{t.pend>0&&<div style={{fontSize:10,color:"#f2c94c"}}>+입고예정 {a2Fmt(t.pend)}</div>}</td>
+                            <td style={{...num,fontWeight:700,color:coverColor(t.cover)}}>{coverTxt(t.cover)}</td>
+                          </tr>);})}
+                        <tr style={{background:"rgba(200,130,26,.15)"}}>
+                          <td style={td}/><td style={{...td,fontWeight:700,color:"#f5c97a"}}>합계</td>
+                          <td style={{...num,fontWeight:800,color:"#f5c97a"}}>{a2Fmt(a2STotal)}</td><td style={num}>100%</td>
+                          <td style={{...num,fontWeight:700}}>{a2Fmt(a2STotal/(a2SDays/7))}</td><td style={num}>{a2Fmt(a2STotal/(a2SDays/30.44))}</td><td style={num}>{a2Fmt(a2STotal/(a2SDays/91.31))}</td>
+                          <td style={td}/><td style={{...num,fontWeight:700}}>{a2Fmt(a2STotal/(a2ProdDays||1))}</td><td style={td}/><td style={td}/>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{marginTop:6,fontSize:11,color:"#8a9a88",lineHeight:1.6}}>※ 평균은 달력 기준(기간 {a2SDays}일 ÷ 7일·30.4일·91.3일)이에요. 재고 소진 예상 = 현재 재고(입고예정 제외) ÷ 생산일 기준 일평균 사용량(기간 합계 ÷ 생산일 {a2ProdDays}일) — <span style={{color:"#ff8080"}}>2일 미만</span> · <span style={{color:"#f5c97a"}}>5일 미만</span> · <span style={{color:"#6fcf97"}}>5일 이상</span>. 행을 누르면 아래에 상세가 나와요.</div>
+                </div>
+
+                {/* 선택한 낱개 상세 */}
+                {S&&(
+                  <div style={{background:"rgba(255,255,255,.03)",border:"1px solid #c8821a55",borderLeft:"4px solid "+a2SColor[sel],borderRadius:10,padding:"14px 16px",marginBottom:26}}>
+                    <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:10}}>
+                      <span style={{fontSize:16,fontWeight:800,color:"#f0f0e8"}}>{dot(sel)}{sName(sel)}</span>
+                      <span style={{fontSize:13,color:"#4db6ac",fontWeight:700}}>합계 {a2Fmt(S.total)}개</span>
+                      <span style={{fontSize:12,color:"#c8c8b8"}}>주평균 {a2Fmt(st.wAvg)} · 월평균 {a2Fmt(st.mAvg)} · 분기평균 {a2Fmt(st.qAvg)}</span>
+                      <span style={{fontSize:12,color:coverColor(st.cover)}}>일평균 {a2Fmt(st.dAvg)} · 재고 {a2Fmt(st.stock)}개 ({coverTxt(st.cover)})</span>
+                      <button onClick={()=>setA2SelS("")} style={{marginLeft:"auto",background:"rgba(255,255,255,.08)",border:"1px solid #7a8a7044",borderRadius:6,color:"#c8c8b8",padding:"3px 10px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✕ 닫기</button>
+                    </div>
+                    <StackedBarChart data={a2Buckets.map(b=>({...a2BucketLbl(b),segs:[{key:sel,name:sName(sel),value:S.b[b]||0,color:a2SColor[sel]}]}))} unit="개" height={200}/>
+                    <div style={{display:"flex",gap:20,flexWrap:"wrap",marginTop:8}}>
+                      <div style={{flex:"1 1 360px"}}>
+                        <div style={{fontSize:13,fontWeight:700,color:"#c8ddb8",marginBottom:8}}>🎁 이 낱개를 쓴 완제품</div>
+                        <Tbl headers={["완제품","사용량","비중"]}>
+                          {Object.keys(S.prod).sort((a,b)=>S.prod[b]-S.prod[a]).map(pc=>(
+                            <tr key={pc}><Td><span style={{color:"#9a7050",fontSize:11}}>[{pc}] </span><span style={{color:"#f5c97a",fontWeight:600}}>{pName(pc)}</span></Td><Td style={{color:"#4db6ac",fontWeight:700}}>{a2Fmt(S.prod[pc])}개</Td><Td>{(S.prod[pc]/S.total*100).toFixed(1)}%</Td></tr>))}
+                        </Tbl>
+                      </div>
+                      <div style={{flex:"1 1 300px"}}>
+                        <div style={{fontSize:13,fontWeight:700,color:"#c8ddb8",marginBottom:8}}>🏢 업체별 사용량</div>
+                        <BarRankChart unit="개" data={Object.keys(S.ch).sort((a,b)=>S.ch[b]-S.ch[a]).map(c=>({label:c,value:S.ch[c],color:a2ChColor[c]}))}/>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ② 구간별 사용 추이 */}
+                <div style={{marginBottom:26}}>
+                  <SecTitle icon="📈" title={"낱개 종류별 사용 추이 ("+A2_GRAN[a2Gran]+")"}/>
+                  <ChartLegend items={[...a2STop.map(k=>({label:sName(k),color:a2SColor[k]})),...(a2SRest.length?[{label:"기타 "+a2SRest.length+"종",color:"#5a6a5a"}]:[])]}/>
+                  <StackedBarChart data={a2SChart} unit="개" height={250}/>
+                </div>
+
+                {/* ③ 낱개 × 구간 표 */}
+                <div style={{marginBottom:10}}>
+                  <SecTitle icon="🗓" title={"낱개 × "+A2_GRAN[a2Gran]+" 사용량"}/>
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
+                      <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
+                        <th style={{...th,textAlign:"left",position:"sticky",left:0,zIndex:2,background:"#4a3f30",minWidth:180}}>낱개</th>
+                        {a2Buckets.map(b=>{const L=a2BucketLbl(b);return<th key={b} style={{...th,textAlign:"right"}}>{L.label}{L.sub&&<div style={{fontSize:10,color:"#8a9a88",fontWeight:400}}>{L.sub}</div>}</th>;})}
+                        <th style={{...th,textAlign:"right",color:"#f5c97a"}}>합계</th>
+                        <th style={{...th,textAlign:"right"}}>구간 평균</th>
+                      </tr></thead>
+                      <tbody>
+                        {a2SKeys.map(k=>(
+                          <tr key={k} onClick={()=>setA2SelS(sel===k?"":k)} style={{cursor:"pointer"}}>
+                            <td style={{...td,position:"sticky",left:0,zIndex:1,background:sel===k?"#4a4230":"#353530",fontWeight:700,color:"#f5c97a",wordBreak:"keep-all"}}>{dot(k)}{sName(k)}</td>
+                            {a2Buckets.map(b=>{const v=a2S[k].b[b]||0;return<td key={b} style={{...num,background:v?"rgba(77,182,172,"+(0.08+v/a2SHeatMax*0.55).toFixed(3)+")":"transparent",color:v?"#f0f0e8":"#5a6a58"}}>{v?a2Fmt(v):"-"}</td>;})}
+                            <td style={{...num,fontWeight:700,color:"#f5c97a"}}>{a2Fmt(a2S[k].total)}</td>
+                            <td style={num}>{a2Fmt(a2S[k].total/(a2Buckets.length||1))}</td>
+                          </tr>))}
+                        <tr style={{background:"rgba(200,130,26,.15)"}}>
+                          <td style={{...td,position:"sticky",left:0,zIndex:1,background:"#4a3f30",fontWeight:700,color:"#f5c97a"}}>합계</td>
+                          {a2Buckets.map(b=><td key={b} style={{...num,fontWeight:700,color:"#f5c97a"}}>{a2Fmt(a2SKeys.reduce((x,k)=>x+(a2S[k].b[b]||0),0))}</td>)}
+                          <td style={{...num,fontWeight:800,color:"#f5c97a"}}>{a2Fmt(a2STotal)}</td>
+                          <td style={num}>{a2Fmt(a2STotal/(a2Buckets.length||1))}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{marginTop:6,fontSize:11,color:"#8a9a88",lineHeight:1.6}}>※ 진한 칸일수록 많이 쓴 구간이에요. <b>*</b> 표시는 조회 기간에 일부 날짜만 포함된 구간이라 실제보다 작게 보일 수 있어요. 주는 월요일 시작이에요.<br/>※ 사용량 = 생산완료 수량 × 현재 BOM 구성 수량 (BOM을 바꾸면 과거 사용량도 새 BOM 기준으로 계산돼요)</div>
+                  {a2NoBom.length>0&&<div style={{marginTop:4,fontSize:11,color:"#e89090"}}>⚠️ BOM 미등록 제품 {a2NoBom.length}개({a2NoBom.slice(0,5).map(pName).join(", ")}{a2NoBom.length>5?" 외":""})는 사용량에서 빠져요. "BOM관리" 탭에서 설정해주세요.</div>}
+                </div>
+              </>);
+            })()}
+
             {a2View==="bych"&&(
               <div>
                 {/* 업체 선택 */}
@@ -5361,14 +5677,14 @@ function App(){
                     <div style={{overflowX:"auto"}}>
                       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,background:"rgba(255,255,255,.03)",border:"1px solid #c8821a33"}}>
                         <thead><tr style={{background:"rgba(200,130,26,.18)"}}>
-                          <th style={{padding:"9px 12px",textAlign:"left",color:"#c8ddb8",whiteSpace:"nowrap",position:"sticky",left:0,background:"#4a3f30"}}>날짜</th>
+                          <th style={{padding:"9px 12px",textAlign:"left",color:"#c8ddb8",whiteSpace:"nowrap",position:"sticky",left:0,zIndex:2,background:"#4a3f30"}}>날짜</th>
                           {a2ChKeys.map(k=><th key={k} style={{padding:"9px 12px",textAlign:"right",color:"#c8ddb8",whiteSpace:"nowrap"}}><span style={{display:"inline-block",width:9,height:9,borderRadius:2,background:a2ChColor[k],marginRight:5}}/>{k}</th>)}
                           <th style={{padding:"9px 12px",textAlign:"right",color:"#f5c97a",whiteSpace:"nowrap"}}>합계</th>
                         </tr></thead>
                         <tbody>
                           {[...a2DateKeys].reverse().map(d=>{const D=a2Date[d];const w=new Date(d+"T00:00:00Z").getUTCDay();const dayTot=a2Pick(D);return(
                             <tr key={d}>
-                              <td style={{padding:"7px 12px",borderBottom:"1px solid #6a6a6444",whiteSpace:"nowrap",color:w===0?"#e89090":w===6?"#8ac8f0":"#e0e0d8",position:"sticky",left:0,background:"#353530"}}>{d.slice(5).replace("-","/")} ({WEEKDAY_KR[w]})</td>
+                              <td style={{padding:"7px 12px",borderBottom:"1px solid #6a6a6444",whiteSpace:"nowrap",color:w===0?"#e89090":w===6?"#8ac8f0":"#e0e0d8",position:"sticky",left:0,zIndex:1,background:"#353530"}}>{d.slice(5).replace("-","/")} ({WEEKDAY_KR[w]})</td>
                               {a2ChKeys.map(k=>{const v=a2Pick(D.ch[k]);const pct=dayTot?v/dayTot*100:0;const a=v?0.10+0.6*(pct/100):0;return(
                                 <td key={k} style={{padding:"7px 12px",borderBottom:"1px solid #6a6a6444",textAlign:"right",fontFamily:"monospace",whiteSpace:"nowrap",background:v?`rgba(77,182,172,${a.toFixed(3)})`:"transparent",color:v?"#f0f0e8":"#5a6a58"}}>
                                   {v?(<>{a2Fmt(v)} <span style={{fontSize:12,fontWeight:700,color:pct>=30?"#ffe08a":"#b8d8d0"}}>({pct.toFixed(1)}%)</span></>):"-"}
@@ -5376,12 +5692,12 @@ function App(){
                               <td style={{padding:"7px 12px",borderBottom:"1px solid #6a6a6444",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:"#f5c97a",whiteSpace:"nowrap"}}>{a2Fmt(dayTot)}</td>
                             </tr>);})}
                           <tr style={{background:"rgba(200,130,26,.15)"}}>
-                            <td style={{padding:"9px 12px",fontWeight:700,color:"#f5c97a",position:"sticky",left:0,background:"#4a3f30"}}>합계</td>
+                            <td style={{padding:"9px 12px",fontWeight:700,color:"#f5c97a",position:"sticky",left:0,zIndex:1,background:"#4a3f30"}}>합계</td>
                             {a2ChKeys.map(k=>{const v=a2Pick(a2Ch[k]);return(<td key={k} style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:"#f5c97a",whiteSpace:"nowrap"}}>{a2Fmt(v)} <span style={{fontSize:12,color:"#ffe08a"}}>({a2TotalPick?(v/a2TotalPick*100).toFixed(1):0}%)</span></td>);})}
                             <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontWeight:800,color:"#f5c97a",whiteSpace:"nowrap"}}>{a2Fmt(a2TotalPick)}</td>
                           </tr>
                           <tr style={{background:"rgba(77,182,172,.08)"}}>
-                            <td style={{padding:"7px 12px",fontWeight:700,color:"#b8d8d0",position:"sticky",left:0,background:"#353530",whiteSpace:"nowrap"}}>일평균 비중</td>
+                            <td style={{padding:"7px 12px",fontWeight:700,color:"#b8d8d0",position:"sticky",left:0,zIndex:1,background:"#353530",whiteSpace:"nowrap"}}>일평균 비중</td>
                             {a2ChKeys.map(k=>{const ps=a2DateKeys.map(d=>{const t=a2Pick(a2Date[d]);return t?a2Pick(a2Date[d].ch[k])/t*100:0;});const avg=ps.length?ps.reduce((a,b)=>a+b,0)/ps.length:0;return(
                               <td key={k} style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:"#b8d8d0"}}>{avg.toFixed(1)}%</td>);})}
                             <td style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",color:"#8a9a88"}}>-</td>
@@ -5414,18 +5730,17 @@ function App(){
                   </div>
                   <div>
                     <SecTitle icon="🎁" title={k+" 제품별 생산 내역"}/>
-                    <Tbl headers={["순위","제품코드","제품명","완제품 합계","낱개 합계","생산일수","비중"]}>
+                    <Tbl headers={["순위","제품코드","제품명","낱개 합계","생산일수","비중"]}>
                       {a2SelProd.map((p,i)=>(
                         <tr key={p.code}>
                           <Td>{i+1}</Td>
                           <Td style={{color:"#9a7050",fontSize:12}}>{p.code}</Td>
                           <Td style={{color:"#f5c97a",fontWeight:700}}>{pName(p.code)}</Td>
-                          <Td>{p.qty.toLocaleString()}개</Td>
                           <Td style={{color:"#4db6ac",fontWeight:700}}>{p.unit.toLocaleString()}개</Td>
                           <Td>{p.days.size}일</Td>
                           <Td>{tot?(a2Pick(p)/tot*100).toFixed(1):0}%</Td>
                         </tr>))}
-                      {a2SelProd.length===0&&<tr><Td colSpan={7} style={{textAlign:"center",color:"#8a9a88"}}>데이터가 없습니다.</Td></tr>}
+                      {a2SelProd.length===0&&<tr><Td colSpan={6} style={{textAlign:"center",color:"#8a9a88"}}>데이터가 없습니다.</Td></tr>}
                     </Tbl>
                   </div>
                   </>);})()}
